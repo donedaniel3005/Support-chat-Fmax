@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { io } from "socket.io-client";
 import "./styles.css";
 
-const API_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/$/, "");
+const API_URL = (import.meta.env.VITE_API_URL || "import.meta.env.VITE_API_URL").replace(/\/$/, "");
 const socket = io(API_URL);
 
 const statusOptions = [
