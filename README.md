@@ -32,4 +32,18 @@ Backend runs on:
 
 ## Production notes
 
+On Vercel, set the client environment variable:
+
+```bash
+VITE_API_URL=https://your-render-service.onrender.com
+```
+
+The deployed agent inbox is:
+
+```bash
+https://your-vercel-domain.vercel.app/admin
+```
+
+On Render, set either `CLIENT_URL` to your Vercel site URL, or `CLIENT_URLS` to a comma-separated list if you need both preview and production domains.
+
 For production, replace SQLite with PostgreSQL or Supabase, add authentication for `/admin`, and restrict CORS to your real domain.

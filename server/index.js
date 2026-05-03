@@ -9,17 +9,21 @@ const Database = require("better-sqlite3");
 
 const PORT = process.env.PORT || 4000;
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
+const CLIENT_URLS = (process.env.CLIENT_URLS || CLIENT_URL)
+  .split(",")
+  .map(url => url.trim())
+  .filter(Boolean);
 const DATABASE_PATH = process.env.DATABASE_PATH || "./support.sqlite";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
 
 const app = express();
 const server = http.createServer(app);
 
-app.use(cors({ origin: CLIENT_URL, credentials: true }));
+app.use(cors({ origin: CLIENT_URLS, credentials: true }));
 app.use(express.json({ limit: "12mb" }));
 
 const io = new Server(server, {
-  cors: { origin: CLIENT_URL, methods: ["GET", "POST"] }
+  cors: { origin: CLIENT_URLS, methods: ["GET", "POST"] }
 });
 
 const db = new Database(DATABASE_PATH);
