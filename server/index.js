@@ -17,13 +17,29 @@ const DATABASE_PATH = process.env.DATABASE_PATH || "./support.sqlite";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
 
 const app = express();
+app.use(cors({
+  origin: [
+    "http://localhost:5173",
+    "https://support-chat-fmax.vercel.app",
+    "https://support-chat-fmax-jfw8.vercel.app"
+  ],
+  credentials: true
+}));
 const server = http.createServer(app);
 
 app.use(cors({ origin: CLIENT_URLS, credentials: true }));
 app.use(express.json({ limit: "12mb" }));
 
 const io = new Server(server, {
-  cors: { origin: CLIENT_URLS, methods: ["GET", "POST"] }
+  cors: {
+    origin: [
+      "http://localhost:5173",
+      "https://support-chat-fmax.vercel.app",
+      "https://support-chat-fmax-jfw8.vercel.app"
+    ],
+    methods: ["GET", "POST"],
+    credentials: true
+  }
 });
 
 const db = new Database(DATABASE_PATH);
