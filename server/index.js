@@ -20,8 +20,23 @@ const DATABASE_PATH = process.env.DATABASE_PATH || "./support.sqlite";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@example.com";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin12345";
+const OWNER_EMAIL = (process.env.OWNER_EMAIL || ADMIN_EMAIL || "danielkariuki3005@gmail.com").toLowerCase();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const PRODUCT_NAME = "24/7Support";
+
+const PLAN_LIMITS = {
+  free: { websites: 1, staffSeats: 1, monthlyConversations: 50, aiDrafts: false },
+  starter: { websites: 1, staffSeats: 3, monthlyConversations: 500, aiDrafts: false },
+  growth: { websites: 3, staffSeats: 8, monthlyConversations: 2000, aiDrafts: true },
+  partner: { websites: 10, staffSeats: 20, monthlyConversations: 10000, aiDrafts: true }
+};
+
+const PLAN_NAMES = {
+  free: "Free",
+  starter: "Starter",
+  growth: "Growth",
+  partner: "Partner"
+};
 
 const app = express();
 const server = http.createServer(app);
@@ -83,6 +98,8 @@ CREATE TABLE IF NOT EXISTS projects (
   secret_key TEXT NOT NULL UNIQUE,
   theme_json TEXT NOT NULL,
   ai_enabled INTEGER DEFAULT 1,
+  plan TEXT DEFAULT 'free',
+  billing_status TEXT DEFAULT 'owner_approved',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -153,6 +170,21 @@ CREATE TABLE IF NOT EXISTS automation_templates (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(project_id) REFERENCES projects(id)
 );
+
+CREATE TABLE IF NOT EXISTS plan_requests (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  plan TEXT NOT NULL,
+  company_name TEXT NOT NULL,
+  contact_email TEXT NOT NULL,
+  website_url TEXT DEFAULT '',
+  notes TEXT DEFAULT '',
+  status TEXT DEFAULT 'pending',
+  reviewed_by TEXT DEFAULT '',
+  reviewed_at TEXT DEFAULT '',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(project_id) REFERENCES projects(id)
+);
 `);
 
 function now() {
@@ -173,6 +205,8 @@ ensureColumn("conversations", "screenshot_url", "TEXT DEFAULT ''");
 ensureColumn("messages", "attachments_json", "TEXT DEFAULT '[]'");
 ensureColumn("messages", "ai_generated", "INTEGER DEFAULT 0");
 ensureColumn("automation_templates", "project_id", "TEXT");
+ensureColumn("projects", "plan", "TEXT DEFAULT 'free'");
+ensureColumn("projects", "billing_status", "TEXT DEFAULT 'owner_approved'");
 
 function randomKey(prefix) {
   return `${prefix}_${crypto.randomBytes(24).toString("hex")}`;
@@ -221,9 +255,88 @@ function formatProject(row) {
     secretKey: row.secret_key,
     theme: parseTheme(row.theme_json),
     aiEnabled: Boolean(row.ai_enabled),
+    plan: row.plan || "free",
+    billingStatus: row.billing_status || "owner_approved",
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function formatStaffUser(row) {
+  return {
+    id: row.id,
+    email: row.email,
+    role: row.role || "agent",
+    createdAt: row.created_at
+  };
+}
+
+function formatPlanRequest(row) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    plan: row.plan,
+    planName: PLAN_NAMES[row.plan] || row.plan,
+    companyName: row.company_name,
+    contactEmail: row.contact_email,
+    websiteUrl: row.website_url,
+    notes: row.notes,
+    status: row.status,
+    reviewedBy: row.reviewed_by,
+    reviewedAt: row.reviewed_at,
+    createdAt: row.created_at
+  };
+}
+
+function isOwner(session) {
+  return String(session?.email || "").toLowerCase() === OWNER_EMAIL;
+}
+
+function getPlanLimits(plan) {
+  return PLAN_LIMITS[plan] || PLAN_LIMITS.free;
+}
+
+function getProjectUsage(projectId) {
+  const staffSeats = db.prepare("SELECT COUNT(*) as count FROM staff_users WHERE project_id = ?").get(projectId).count;
+  const monthlyConversations = db.prepare(`
+    SELECT COUNT(*) as count FROM conversations
+    WHERE project_id = ?
+      AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+  `).get(projectId).count;
+  return { staffSeats, monthlyConversations };
+}
+
+function getPlanSummary(project) {
+  const limits = getPlanLimits(project.plan);
+  return {
+    plan: project.plan,
+    planName: PLAN_NAMES[project.plan] || project.plan,
+    billingStatus: project.billingStatus,
+    limits,
+    usage: getProjectUsage(project.id)
+  };
+}
+
+function requireActivePlan(project) {
+  if (project.billingStatus === "paused") {
+    return { allowed: false, status: 402, error: "This workspace is paused. Contact the team to restore access." };
+  }
+  return { allowed: true };
+}
+
+function requireConversationAllowance(project) {
+  const active = requireActivePlan(project);
+  if (!active.allowed) return active;
+  const limits = getPlanLimits(project.plan);
+  const usage = getProjectUsage(project.id);
+  if (usage.monthlyConversations >= limits.monthlyConversations) {
+    return {
+      allowed: false,
+      status: 402,
+      error: `${PLAN_NAMES[project.plan] || "Current"} plan limit reached: ${limits.monthlyConversations} conversations this month.`
+    };
+  }
+  return { allowed: true };
 }
 
 function seedDefaultProject() {
@@ -542,7 +655,7 @@ app.post("/api/auth/login", (req, res) => {
   const project = formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(user.project_id));
   res.json({
     token,
-    user: { id: user.id, email: user.email, role: user.role, projectId: user.project_id },
+    user: { id: user.id, email: user.email, role: user.role, projectId: user.project_id, isOwner: user.email === OWNER_EMAIL },
     project
   });
 });
@@ -550,8 +663,9 @@ app.post("/api/auth/login", (req, res) => {
 app.get("/api/auth/me", requireAdmin, (req, res) => {
   const project = formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id));
   res.json({
-    user: { id: req.admin.user_id, email: req.admin.email, role: req.admin.role, projectId: req.admin.project_id },
-    project
+    user: { id: req.admin.user_id, email: req.admin.email, role: req.admin.role, projectId: req.admin.project_id, isOwner: isOwner(req.admin) },
+    project,
+    billing: getPlanSummary(project)
   });
 });
 
@@ -561,11 +675,14 @@ app.post("/api/auth/logout", requireAdmin, (req, res) => {
 });
 
 app.get("/api/widget/config", requireWidgetProject, (req, res) => {
+  const active = requireActivePlan(req.project);
+  if (!active.allowed) return res.status(active.status).json({ error: active.error });
   res.json({
     projectId: req.project.id,
     brandName: PRODUCT_NAME,
     theme: { ...req.project.theme, brandName: PRODUCT_NAME },
-    aiEnabled: req.project.aiEnabled
+    aiEnabled: req.project.aiEnabled && getPlanLimits(req.project.plan).aiDrafts,
+    billing: getPlanSummary(req.project)
   });
 });
 
@@ -574,7 +691,8 @@ app.get("/widget.js", (req, res) => {
 });
 
 app.get("/api/projects/current", requireAdmin, (req, res) => {
-  res.json(formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id)));
+  const project = formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id));
+  res.json({ ...project, billing: getPlanSummary(project) });
 });
 
 app.put("/api/projects/current", requireAdmin, (req, res) => {
@@ -589,6 +707,160 @@ app.put("/api/projects/current", requireAdmin, (req, res) => {
   `).run(name, websiteUrl, JSON.stringify(theme), aiEnabled, now(), req.admin.project_id);
 
   res.json(formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id)));
+});
+
+app.patch("/api/projects/current/billing", requireAdmin, (req, res) => {
+  if (!isOwner(req.admin)) return res.status(403).json({ error: "Only the account owner can approve billing plans." });
+
+  const allowedPlans = new Set(["free", "starter", "growth", "partner"]);
+  const allowedStatuses = new Set(["owner_approved", "pending_approval", "paused"]);
+  const plan = String(req.body.plan || "free").trim().toLowerCase();
+  const billingStatus = String(req.body.billingStatus || "owner_approved").trim().toLowerCase();
+
+  if (!allowedPlans.has(plan) || !allowedStatuses.has(billingStatus)) {
+    return res.status(400).json({ error: "Choose a valid plan and billing status." });
+  }
+
+  db.prepare("UPDATE projects SET plan = ?, billing_status = ?, updated_at = ? WHERE id = ?")
+    .run(plan, billingStatus, now(), req.admin.project_id);
+  const project = formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id));
+  res.json(project);
+});
+
+app.get("/api/billing/limits", (req, res) => {
+  res.json({ plans: PLAN_LIMITS });
+});
+
+app.post("/api/billing/requests", (req, res) => {
+  const allowedPlans = new Set(Object.keys(PLAN_LIMITS));
+  const plan = String(req.body.plan || "").trim().toLowerCase();
+  const companyName = String(req.body.companyName || "").trim().slice(0, 120);
+  const contactEmail = String(req.body.contactEmail || "").trim().toLowerCase().slice(0, 160);
+  const websiteUrl = String(req.body.websiteUrl || "").trim().slice(0, 240);
+  const notes = String(req.body.notes || "").trim().slice(0, 1000);
+  const project = getDefaultProject();
+
+  if (!allowedPlans.has(plan)) return res.status(400).json({ error: "Choose a valid plan." });
+  if (!companyName) return res.status(400).json({ error: "Company or project name is required." });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+
+  const recentDuplicate = db.prepare(`
+    SELECT * FROM plan_requests
+    WHERE contact_email = ? AND plan = ? AND status = 'pending'
+    ORDER BY created_at DESC LIMIT 1
+  `).get(contactEmail, plan);
+
+  if (recentDuplicate) return res.status(200).json({ request: formatPlanRequest(recentDuplicate), duplicate: true });
+
+  const requestId = uuid();
+  db.prepare(`
+    INSERT INTO plan_requests (id, project_id, plan, company_name, contact_email, website_url, notes, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+  `).run(requestId, project.id, plan, companyName, contactEmail, websiteUrl, notes, now());
+
+  const request = db.prepare("SELECT * FROM plan_requests WHERE id = ?").get(requestId);
+  res.status(201).json({ request: formatPlanRequest(request) });
+});
+
+app.get("/api/billing/requests", requireAdmin, (req, res) => {
+  if (!isOwner(req.admin)) return res.status(403).json({ error: "Only the owner account can review plan requests." });
+  const status = String(req.query.status || "").trim().toLowerCase();
+  const rows = status
+    ? db.prepare("SELECT * FROM plan_requests WHERE status = ? ORDER BY created_at DESC").all(status)
+    : db.prepare("SELECT * FROM plan_requests ORDER BY created_at DESC").all();
+  res.json(rows.map(formatPlanRequest));
+});
+
+app.patch("/api/billing/requests/:id", requireAdmin, (req, res) => {
+  if (!isOwner(req.admin)) return res.status(403).json({ error: "Only the owner account can review plan requests." });
+
+  const action = String(req.body.action || "").trim().toLowerCase();
+  if (!["approve", "reject"].includes(action)) return res.status(400).json({ error: "Action must be approve or reject." });
+
+  const request = db.prepare("SELECT * FROM plan_requests WHERE id = ?").get(req.params.id);
+  if (!request) return res.status(404).json({ error: "Plan request not found." });
+  if (request.status !== "pending") return res.status(400).json({ error: "This request has already been reviewed." });
+
+  const nextStatus = action === "approve" ? "approved" : "rejected";
+  const reviewedAt = now();
+  const applyReview = db.transaction(() => {
+    db.prepare("UPDATE plan_requests SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?")
+      .run(nextStatus, req.admin.email, reviewedAt, req.params.id);
+
+    if (action === "approve") {
+      db.prepare("UPDATE projects SET plan = ?, billing_status = 'owner_approved', website_url = COALESCE(NULLIF(?, ''), website_url), updated_at = ? WHERE id = ?")
+        .run(request.plan, request.website_url || "", reviewedAt, request.project_id || req.admin.project_id);
+    }
+  });
+
+  applyReview();
+  const reviewed = db.prepare("SELECT * FROM plan_requests WHERE id = ?").get(req.params.id);
+  res.json(formatPlanRequest(reviewed));
+});
+
+app.get("/api/staff", requireAdmin, (req, res) => {
+  const users = db.prepare(`
+    SELECT id, email, role, created_at FROM staff_users
+    WHERE project_id = ?
+    ORDER BY created_at ASC
+  `).all(req.admin.project_id).map(formatStaffUser);
+  res.json(users);
+});
+
+app.post("/api/staff", requireAdmin, (req, res) => {
+  if (!isOwner(req.admin) && req.admin.role !== "admin") {
+    return res.status(403).json({ error: "Only admins can add teammates." });
+  }
+
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const password = String(req.body.password || "");
+  const role = req.body.role === "admin" ? "admin" : "agent";
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: "Enter a valid teammate email." });
+  }
+
+  if (password.length < 10) {
+    return res.status(400).json({ error: "Temporary password must be at least 10 characters." });
+  }
+
+  const project = formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id));
+  const limits = getPlanLimits(project.plan);
+  const usage = getProjectUsage(project.id);
+  if (usage.staffSeats >= limits.staffSeats) {
+    return res.status(402).json({ error: `${PLAN_NAMES[project.plan] || "Current"} plan allows ${limits.staffSeats} staff seat${limits.staffSeats === 1 ? "" : "s"}.` });
+  }
+
+  try {
+    db.prepare(`
+      INSERT INTO staff_users (id, project_id, email, password_hash, role, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(uuid(), req.admin.project_id, email, hashPassword(password), role, now());
+  } catch (error) {
+    return res.status(409).json({ error: "That staff email already exists." });
+  }
+
+  const users = db.prepare("SELECT id, email, role, created_at FROM staff_users WHERE project_id = ? ORDER BY created_at ASC")
+    .all(req.admin.project_id)
+    .map(formatStaffUser);
+  res.status(201).json(users);
+});
+
+app.delete("/api/staff/:id", requireAdmin, (req, res) => {
+  if (!isOwner(req.admin) && req.admin.role !== "admin") {
+    return res.status(403).json({ error: "Only admins can remove teammates." });
+  }
+
+  if (req.params.id === req.admin.user_id) {
+    return res.status(400).json({ error: "You cannot remove your own account while signed in." });
+  }
+
+  const result = db.prepare("DELETE FROM staff_users WHERE id = ? AND project_id = ?").run(req.params.id, req.admin.project_id);
+  if (result.changes === 0) return res.status(404).json({ error: "Staff user not found." });
+  db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(req.params.id);
+  res.json({ ok: true });
 });
 
 app.post("/api/projects/current/rotate-key", requireAdmin, (req, res) => {
@@ -646,6 +918,9 @@ app.post("/api/conversations", requireWidgetProject, async (req, res) => {
   if (!xUsername || xUsername.trim().length < 1) {
     return res.status(400).json({ error: "X username is required." });
   }
+
+  const allowance = requireConversationAllowance(req.project);
+  if (!allowance.allowed) return res.status(allowance.status).json({ error: allowance.error });
 
   const customerId = uuid();
   const conversationId = uuid();
@@ -783,6 +1058,9 @@ app.post("/api/conversations/:id/ai-draft", requireAdmin, async (req, res) => {
 
   const project = formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id));
   if (!project.aiEnabled) return res.status(400).json({ error: "AI support is disabled for this project." });
+  if (!getPlanLimits(project.plan).aiDrafts) {
+    return res.status(402).json({ error: "AI drafts are available on Growth and Partner plans." });
+  }
 
   const draft = await generateAiReply(conversation);
   res.json({ draft, provider: OPENAI_API_KEY ? "openai" : "local-rule" });

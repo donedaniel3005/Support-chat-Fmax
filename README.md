@@ -15,6 +15,9 @@ A downloadable Intercom-style support system for projects and companies. It incl
 - Customer metadata: name, email, wallet, page URL
 - Optional Discord webhook alert for new conversations
 - Editable automation templates and auto-replies
+- Manual staff teammate access from Admin
+- Pricing plan requests with owner review from Admin
+- Backend plan limits for staff seats, monthly conversations, paused workspaces, and AI drafts
 
 ## Setup
 
@@ -48,9 +51,25 @@ CLIENT_URLS=http://localhost:5173,https://your-domain.com
 DATABASE_PATH=./support.sqlite
 ADMIN_EMAIL=owner@your-company.com
 ADMIN_PASSWORD=use-a-long-password
+OWNER_EMAIL=danielkariuki3005@gmail.com
 OPENAI_API_KEY=
 DISCORD_WEBHOOK_URL=
 ```
+
+## Team access and pricing
+
+Products like Intercom usually create a company workspace first, then the owner invites teammates by email and assigns roles. This MVP now supports the practical first version: an admin can add a teammate email with a temporary password from `/admin`, and remove that access later.
+
+The public site shows Free, Starter, Growth, and Partner tiers. Clients submit plan requests from the pricing page, and those requests appear in `/admin` for the configured `OWNER_EMAIL` to approve or reject. Approved requests update the active workspace plan.
+
+Backend limits are enforced by plan:
+
+- Free: 1 staff seat, 50 conversations/month, no AI drafts
+- Starter: 3 staff seats, 500 conversations/month, no AI drafts
+- Growth: 8 staff seats, 2,000 conversations/month, AI drafts
+- Partner: 20 staff seats, 10,000 conversations/month, AI drafts
+
+Paused workspaces cannot load the widget or create new conversations.
 
 ## Widget install
 
@@ -91,4 +110,4 @@ https://your-vercel-domain.vercel.app/admin
 
 On Render, set either `CLIENT_URL` to your Vercel site URL, or `CLIENT_URLS` to a comma-separated list if you need both preview and production domains.
 
-For larger production use, replace SQLite with PostgreSQL or Supabase, add invite-based staff management, and store widget assets behind your final domain.
+For larger production use, replace SQLite with PostgreSQL or Supabase, add emailed invite links and password reset, connect real payment webhooks, and store widget assets behind your final domain.

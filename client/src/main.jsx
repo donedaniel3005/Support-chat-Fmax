@@ -9,6 +9,7 @@ const WIDGET_KEY = import.meta.env.VITE_WIDGET_KEY || "demo_widget_key";
 const AUTH_KEY = "support-admin-token";
 const CUSTOMER_TICKET_IDS_KEY = `support-customer-ticket-ids:${WIDGET_KEY}`;
 const PRODUCT_NAME = "24/7Support";
+const CONTACT_EMAIL = "danielkariuki3005@gmail.com";
 
 const socket = io(API_URL);
 
@@ -47,10 +48,36 @@ const marketingFeatures = [
 ];
 
 const setupSteps = [
-  "Install 24/7Support on your server or local machine.",
-  "Create a project for each company, product, or client website.",
-  "Copy the widget script and paste it before the closing body tag.",
-  "Invite support staff, customize the theme, and start replying."
+  {
+    title: "Download the project",
+    body: "Clone the GitHub repo or download the ZIP, then open the project folder on your machine or server.",
+    code: "git clone https://github.com/donedaniel3005/Support-chat-Fmax.git",
+    link: "https://github.com/donedaniel3005/Support-chat-Fmax"
+  },
+  {
+    title: "Install and build",
+    body: "Install the backend and frontend packages, then create a production build.",
+    code: "cd Support-chat-Fmax\nnpm run install:all\nnpm run build"
+  },
+  {
+    title: "Create your environment file",
+    body: "Copy the example env file, set your admin login, and add your live frontend URL.",
+    code: "cp .env.example .env\nADMIN_EMAIL=you@company.com\nADMIN_PASSWORD=use-a-strong-password"
+  },
+  {
+    title: "Start the support server",
+    body: "Run the Node server locally, on a VPS, or on a backend host like Render or Railway.",
+    code: "npm start"
+  },
+  {
+    title: "Install the widget on a website",
+    body: "Copy the widget script from Admin and paste it before the closing body tag on the client website.",
+    code: `<script src="${API_URL}/widget.js" data-key="${WIDGET_KEY}"></script>`
+  },
+  {
+    title: "Customize and invite staff",
+    body: "Open Admin, set the theme, update automations, rotate widget keys when needed, and start replying."
+  }
 ];
 
 const platformStats = [
@@ -59,11 +86,54 @@ const platformStats = [
   { value: "AI drafts", label: "for faster replies" }
 ];
 
+const pricingPlans = [
+  {
+    id: "free",
+    name: "Free",
+    price: "$0",
+    cadence: "while testing",
+    description: "For small teams validating the widget before launch.",
+    features: ["1 website", "1 staff seat", "50 conversations/month", "Automated request review"]
+  },
+  {
+    id: "starter",
+    name: "Starter",
+    price: "$9",
+    cadence: "per month",
+    description: "Affordable live support for a solo operator or small business.",
+    features: ["1 website", "3 staff seats", "500 conversations/month", "Widget customization"]
+  },
+  {
+    id: "growth",
+    name: "Growth",
+    price: "$19",
+    cadence: "per month",
+    description: "For teams with steady customer volume and shared inbox needs.",
+    features: ["3 websites", "8 staff seats", "2,000 conversations/month", "AI drafts and automations"]
+  },
+  {
+    id: "partner",
+    name: "Partner",
+    price: "$39",
+    cadence: "per month",
+    description: "For agencies or operators managing multiple client sites.",
+    features: ["10 websites", "20 staff seats", "10,000 conversations/month", "Priority setup support"]
+  }
+];
+
+const billingStatuses = [
+  { value: "owner_approved", label: "Owner approved" },
+  { value: "pending_approval", label: "Pending approval" },
+  { value: "paused", label: "Paused" }
+];
+
 const fallbackProject = {
   name: "FMAX",
   widgetKey: WIDGET_KEY,
   websiteUrl: "http://localhost:5173",
   aiEnabled: true,
+  plan: "free",
+  billingStatus: "owner_approved",
   theme: {
     brandName: PRODUCT_NAME,
     accentColor: "#14b8a6",
@@ -143,6 +213,59 @@ function rememberCustomerTicket(id) {
 function getTicketPreview(ticket) {
   const latestMessage = ticket.messages?.[ticket.messages.length - 1];
   return ticket.last_message || latestMessage?.body || (latestMessage?.attachments?.length ? "Image attachment" : "No messages yet");
+}
+
+function getRelativeTicketTime(value) {
+  if (!value) return "";
+  const timestamp = new Date(value).getTime();
+  const difference = Math.max(0, Date.now() - timestamp);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const year = 365 * day;
+
+  if (difference >= year) return `${Math.floor(difference / year)}y`;
+  if (difference >= day) return `${Math.floor(difference / day)}d`;
+  if (difference >= hour) return `${Math.floor(difference / hour)}h`;
+  if (difference >= minute) return `${Math.floor(difference / minute)}m`;
+  return "now";
+}
+
+function WidgetNavIcon({ type }) {
+  if (type === "home") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 10.5 12 4l8 6.5v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-8Z" />
+        <path d="M9 20v-6h6v6" />
+      </svg>
+    );
+  }
+
+  if (type === "messages") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 5h14v10H9l-4 4V5Z" />
+        <path d="M8 9h8M8 12h5" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 7h14v4a2 2 0 0 0 0 4v4H5v-4a2 2 0 0 0 0-4V7Z" />
+      <path d="M9 9h6M9 15h6" />
+    </svg>
+  );
+}
+
+function TicketAvatar({ ticket, brandName }) {
+  const isCustomer = ticket.name && ticket.name !== brandName;
+
+  return (
+    <span className={isCustomer ? "ticket-avatar customer" : "ticket-avatar brand"} aria-hidden="true">
+      {isCustomer ? (ticket.name?.[0] || "C").toUpperCase() : <SupportMark />}
+    </span>
+  );
 }
 
 function readImageAttachments(fileList) {
@@ -243,6 +366,30 @@ function SupportMark() {
 
 function MarketingHome() {
   const leadFeatures = marketingFeatures.slice(0, 4);
+  const [selectedPlan, setSelectedPlan] = useState("starter");
+  const [planRequest, setPlanRequest] = useState({
+    companyName: "",
+    contactEmail: "",
+    websiteUrl: "",
+    notes: ""
+  });
+  const [planRequestStatus, setPlanRequestStatus] = useState("");
+
+  async function submitPlanRequest(event) {
+    event.preventDefault();
+    setPlanRequestStatus("Submitting request...");
+
+    try {
+      await api("/api/billing/requests", {
+        method: "POST",
+        body: JSON.stringify({ ...planRequest, plan: selectedPlan })
+      });
+      setPlanRequest({ companyName: "", contactEmail: "", websiteUrl: "", notes: "" });
+      setPlanRequestStatus("Request sent. The team will review it from the admin workspace.");
+    } catch (err) {
+      setPlanRequestStatus(err.error || "Could not send plan request.");
+    }
+  }
 
   return (
     <main className="marketing-page">
@@ -251,6 +398,7 @@ function MarketingHome() {
           <strong>{PRODUCT_NAME}</strong>
           <div>
             <a href="#features">Features</a>
+            <a href="#pricing">Pricing</a>
             <a href="#getting-started">Get started</a>
             <a href="/admin">Admin</a>
           </div>
@@ -264,7 +412,7 @@ function MarketingHome() {
 
             <div className="hero-actions">
               <a className="primary-link" href="/admin">Open admin</a>
-              <a className="secondary-link" href="#getting-started">See setup</a>
+              <a className="secondary-link" href="#pricing">See pricing</a>
             </div>
 
             <div className="lead-feature-grid" aria-label="Top features">
@@ -319,17 +467,84 @@ function MarketingHome() {
         </div>
       </section>
 
+      <section id="pricing" className="marketing-section pricing-section">
+        <div className="section-heading">
+          <span className="eyebrow">Pricing</span>
+          <h2>Affordable plans that can start free while clients test.</h2>
+          <p>Pick a plan and submit a request. The team reviews requests in the admin workspace and the backend automatically enforces each plan's limits.</p>
+        </div>
+
+        <div className="pricing-grid">
+          {pricingPlans.map(plan => (
+            <article key={plan.id} className={plan.id === "starter" ? "pricing-card highlighted" : "pricing-card"}>
+              <div>
+                <h3>{plan.name}</h3>
+                <p>{plan.description}</p>
+              </div>
+              <div className="price-row">
+                <strong>{plan.price}</strong>
+                <span>{plan.cadence}</span>
+              </div>
+              <ul>
+                {plan.features.map(feature => <li key={feature}>{feature}</li>)}
+              </ul>
+              <button type="button" onClick={() => setSelectedPlan(plan.id)}>Request {plan.name}</button>
+            </article>
+          ))}
+        </div>
+
+        <form className="plan-request-form" onSubmit={submitPlanRequest}>
+          <div>
+            <span className="eyebrow">Plan request</span>
+            <h3>Request {pricingPlans.find(plan => plan.id === selectedPlan)?.name || "a plan"}</h3>
+            <p>Requests go straight into the admin review queue. The team can approve, reject, or follow up by email.</p>
+          </div>
+
+          <label>Plan
+            <select value={selectedPlan} onChange={event => setSelectedPlan(event.target.value)}>
+              {pricingPlans.map(plan => <option key={plan.id} value={plan.id}>{plan.name} - {plan.price}</option>)}
+            </select>
+          </label>
+          <label>Company or project name
+            <input required value={planRequest.companyName} onChange={event => setPlanRequest({ ...planRequest, companyName: event.target.value })} />
+          </label>
+          <label>Email
+            <input type="email" required value={planRequest.contactEmail} onChange={event => setPlanRequest({ ...planRequest, contactEmail: event.target.value })} />
+          </label>
+          <label>Website
+            <input type="url" placeholder="https://example.com" value={planRequest.websiteUrl} onChange={event => setPlanRequest({ ...planRequest, websiteUrl: event.target.value })} />
+          </label>
+          <label>Notes
+            <textarea placeholder="Tell us what you need help supporting." value={planRequest.notes} onChange={event => setPlanRequest({ ...planRequest, notes: event.target.value })} />
+          </label>
+          <button type="submit">Send request</button>
+          {planRequestStatus && <p className="pricing-note">{planRequestStatus}</p>}
+        </form>
+
+        <p className="pricing-note">Clients can also email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> for setup, upgrades, or billing questions.</p>
+      </section>
+
       <section id="getting-started" className="marketing-section setup-section">
         <div className="section-heading">
           <span className="eyebrow">Get started</span>
-          <h2>From install to live widget in four steps.</h2>
+          <h2>From download to live widget, step by step.</h2>
+          <p>Install 24/7Support yourself, deploy the backend, then paste one widget script into any company website.</p>
+          <div className="setup-actions">
+            <a className="primary-link" href="https://github.com/donedaniel3005/Support-chat-Fmax" target="_blank" rel="noreferrer">Download from GitHub</a>
+            <a className="secondary-link" href="/admin">Open admin</a>
+          </div>
         </div>
 
         <div className="setup-list">
           {setupSteps.map((step, index) => (
-            <article key={step}>
+            <article key={step.title}>
               <span>{index + 1}</span>
-              <p>{step}</p>
+              <div>
+                <h3>{step.title}</h3>
+                <p>{step.body}</p>
+                {step.code && <code>{step.code}</code>}
+                {step.link && <a href={step.link} target="_blank" rel="noreferrer">Open repository</a>}
+              </div>
             </article>
           ))}
         </div>
@@ -337,17 +552,18 @@ function MarketingHome() {
 
       <section className="marketing-section audience-section">
         <div>
-          <span className="eyebrow">Built for operators</span>
-          <h2>Own the customer experience instead of renting it.</h2>
+          <span className="eyebrow">Team access</span>
+          <h2>Intercom-style admin access starts with invited teammates.</h2>
         </div>
-        <p>24/7Support is designed as software companies can download, deploy, theme, and run themselves. Each project gets its own widget key, settings, conversations, automations, and customer data.</p>
+        <p>In tools like Intercom, the company owner signs up, then invites teammates by email and assigns roles. This MVP now supports that core flow from Admin: add approved staff emails, give them a temporary password, and remove access when needed.</p>
       </section>
 
       <section className="final-cta">
         <span className="eyebrow">Ready to test it?</span>
-        <h2>Open the support bubble or sign in to the admin dashboard.</h2>
+        <h2>Open the support bubble, request a plan, or sign in to the admin dashboard.</h2>
         <div className="hero-actions">
           <a className="primary-link" href="/admin">Open admin</a>
+          <a className="secondary-link" href={`mailto:${CONTACT_EMAIL}`}>Email creator</a>
           <button type="button" className="secondary-link" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>Back to top</button>
         </div>
       </section>
@@ -357,7 +573,7 @@ function MarketingHome() {
 
 function CustomerWidget() {
   const [open, setOpen] = useState(false);
-  const [activeWidgetView, setActiveWidgetView] = useState("new-ticket");
+  const [activeWidgetView, setActiveWidgetView] = useState("inbox");
   const [project, setProject] = useState(fallbackProject);
   const [conversation, setConversation] = useState(null);
   const [customerTickets, setCustomerTickets] = useState([]);
@@ -532,6 +748,11 @@ function CustomerWidget() {
     setCustomerTickets(previousTickets => previousTickets.map(ticket => ticket.id === data.id ? data : ticket));
   }
 
+  function openWidgetView(view) {
+    setActiveWidgetView(view);
+    if (view !== "inbox") setConversation(null);
+  }
+
   return (
     <>
       <MarketingHome />
@@ -548,26 +769,22 @@ function CustomerWidget() {
           }}
         >
           <div className="chat-header">
-            <div className="support-title-row">
-              <span className="support-brand-glyph" aria-hidden="true"><SupportMark /></span>
-              <div>
-                <strong>{widgetBrandName}</strong>
-                <small>{theme.replyTime}</small>
-              </div>
-            </div>
+            {conversation && activeWidgetView === "inbox" ? (
+              <button type="button" className="thread-back icon-back" aria-label="Back to messages" onClick={() => setConversation(null)}>‹</button>
+            ) : <span className="header-spacer" aria-hidden="true" />}
+            <strong>{conversation && activeWidgetView === "inbox" ? "Conversation" : activeWidgetView === "new-ticket" ? "New message" : activeWidgetView === "home" ? "Home" : "Messages"}</strong>
             <button type="button" aria-label="Close chat" onClick={() => setOpen(false)}>x</button>
           </div>
 
-          <div className="widget-tabs" aria-label="Support widget sections">
-            <button type="button" className={activeWidgetView === "new-ticket" ? "active" : ""} onClick={() => setActiveWidgetView("new-ticket")}>
-              New Ticket
-            </button>
-            <button type="button" className={activeWidgetView === "inbox" ? "active" : ""} onClick={() => { setActiveWidgetView("inbox"); setConversation(null); }}>
-              Inbox
-            </button>
-          </div>
-
-          {activeWidgetView === "new-ticket" ? (
+          <div className="widget-body">
+          {activeWidgetView === "home" ? (
+            <div className="widget-home">
+              <span className="support-brand-glyph" aria-hidden="true"><SupportMark /></span>
+              <h2>{theme.greeting}</h2>
+              <p>{theme.replyTime}. Start a message or reopen one of your saved support threads.</p>
+              <button type="button" onClick={() => openWidgetView("new-ticket")}>Send us a message</button>
+            </div>
+          ) : activeWidgetView === "new-ticket" ? (
             <form className="chat-form" onSubmit={startConversation}>
               <div className="chat-intro">
                 <strong>{theme.greeting}</strong>
@@ -577,7 +794,7 @@ function CustomerWidget() {
               <label>Name<input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></label>
               <label>Email<input type="email" value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} /></label>
               <label>X username<input required placeholder="@yourhandle" value={form.xUsername} onChange={event => setForm({ ...form, xUsername: event.target.value })} /></label>
-              <label>Wallet or order reference<input value={form.wallet} onChange={event => setForm({ ...form, wallet: event.target.value })} /></label>
+              <label>Wallet<input value={form.wallet} onChange={event => setForm({ ...form, wallet: event.target.value })} /></label>
               <label>Screenshot link<input type="url" placeholder="https://..." value={form.screenshotUrl} onChange={event => setForm({ ...form, screenshotUrl: event.target.value })} /></label>
               <AttachmentPicker attachments={ticketAttachments} onChange={setTicketAttachments} label="Attach screenshots" />
               <label>Message<textarea required value={form.firstMessage} onChange={event => setForm({ ...form, firstMessage: event.target.value })} /></label>
@@ -588,9 +805,11 @@ function CustomerWidget() {
           ) : conversation ? (
             <>
               <div className="ticket-summary">
-                <button type="button" className="thread-back" onClick={() => setConversation(null)}>Tickets</button>
-                <strong>{conversation.status || "open"}</strong>
-                <span>{conversation.x_username || normalizeXUsername(form.xUsername)}</span>
+                <TicketAvatar ticket={conversation} brandName={widgetBrandName} />
+                <div>
+                  <strong>{conversation.x_username || conversation.name || widgetBrandName}</strong>
+                  <span>{conversation.status || "open"}</span>
+                </div>
               </div>
 
               <div className="messages">
@@ -613,27 +832,47 @@ function CustomerWidget() {
             </>
           ) : customerTickets.length > 0 || isLoadingTickets ? (
             <div className="customer-ticket-list">
-              <div className="ticket-list-header">
-                <strong>Your tickets</strong>
-                <span>{isLoadingTickets ? "Loading..." : `${customerTickets.length} saved`}</span>
-              </div>
+              {isLoadingTickets && <p className="loading-line">Loading messages...</p>}
 
               {customerTickets.map(ticket => (
                 <button key={ticket.id} type="button" className="customer-ticket-card" onClick={() => selectCustomerTicket(ticket.id)}>
-                  <span className={`ticket-card-status ${ticket.status || "open"}`}>{ticket.status || "open"}</span>
-                  <strong>{ticket.x_username || ticket.name || "Support ticket"}</strong>
-                  <small>{formatTime(ticket.updated_at || ticket.created_at)}</small>
-                  <p>{getTicketPreview(ticket)}</p>
+                  <TicketAvatar ticket={ticket} brandName={widgetBrandName} />
+                  <span className="ticket-row-time">{getRelativeTicketTime(ticket.updated_at || ticket.created_at)}</span>
+                  <span className="ticket-row-copy">
+                    <strong>{ticket.x_username || ticket.name || widgetBrandName}</strong>
+                    <p>{getTicketPreview(ticket)}</p>
+                  </span>
                 </button>
               ))}
             </div>
           ) : (
             <div className="inbox-empty">
-              <strong>No tickets yet</strong>
+              <strong>No messages yet</strong>
               <p>Open a new ticket and replies from support will appear here.</p>
-              <button type="button" onClick={() => setActiveWidgetView("new-ticket")}>New Ticket</button>
             </div>
           )}
+          </div>
+
+          {!conversation && activeWidgetView === "inbox" && (
+            <button type="button" className="widget-floating-cta" onClick={() => openWidgetView("new-ticket")}>
+              Send us a message <span aria-hidden="true">▶</span>
+            </button>
+          )}
+
+          <nav className="widget-bottom-nav" aria-label="Support widget navigation">
+            <button type="button" className={activeWidgetView === "home" ? "active" : ""} onClick={() => openWidgetView("home")}>
+              <WidgetNavIcon type="home" />
+              <span>Home</span>
+            </button>
+            <button type="button" className={activeWidgetView === "inbox" ? "active" : ""} onClick={() => openWidgetView("inbox")}>
+              <WidgetNavIcon type="messages" />
+              <span>Messages</span>
+            </button>
+            <button type="button" className={activeWidgetView === "new-ticket" ? "active" : ""} onClick={() => openWidgetView("new-ticket")}>
+              <WidgetNavIcon type="tickets" />
+              <span>Tickets</span>
+            </button>
+          </nav>
         </div>
       )}
 
@@ -652,8 +891,8 @@ function CustomerWidget() {
 }
 
 function LoginScreen({ onLogin }) {
-  const [email, setEmail] = useState("admin@example.com");
-  const [password, setPassword] = useState("admin12345");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -679,13 +918,21 @@ function LoginScreen({ onLogin }) {
   return (
     <main className="login-shell">
       <form className="login-panel" onSubmit={submit}>
-        <span className="eyebrow">Secure admin</span>
+        <div className="login-brand-row">
+          <span className="brand-glyph">S</span>
+          <div>
+            <strong>{PRODUCT_NAME}</strong>
+            <small>Admin workspace</small>
+          </div>
+        </div>
+        <span className="eyebrow">Secure team sign-in</span>
         <h1>Sign in to {PRODUCT_NAME}</h1>
-        <p>Use your staff account to manage conversations, themes, widget keys, and AI replies.</p>
-        <label>Email<input type="email" value={email} onChange={event => setEmail(event.target.value)} /></label>
-        <label>Password<input type="password" value={password} onChange={event => setPassword(event.target.value)} /></label>
+        <p>Use an approved staff account. Account owners add teammates by email from Admin, similar to Intercom-style workspace invites.</p>
+        <label>Email<input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} /></label>
+        <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} /></label>
         {error && <p className="form-error">{error}</p>}
         <button type="submit" disabled={loading}>{loading ? "Signing in..." : "Sign in"}</button>
+        <p className="login-help">Need access or free-tier approval? Email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.</p>
       </form>
     </main>
   );
@@ -702,6 +949,12 @@ function AdminInbox() {
   const [replyAttachments, setReplyAttachments] = useState([]);
   const [statusFilter, setStatusFilter] = useState("");
   const [automations, setAutomations] = useState([]);
+  const [staffUsers, setStaffUsers] = useState([]);
+  const [staffForm, setStaffForm] = useState({ email: "", password: "", role: "agent" });
+  const [staffStatus, setStaffStatus] = useState("");
+  const [planRequests, setPlanRequests] = useState([]);
+  const [planRequestAdminStatus, setPlanRequestAdminStatus] = useState("");
+  const [billingStatus, setBillingStatus] = useState("");
   const [automationStatus, setAutomationStatus] = useState("");
   const [settingsStatus, setSettingsStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -725,6 +978,16 @@ function AdminInbox() {
     if (!token) return;
     setAutomations(await api("/api/automations", {}, token));
   }, [token]);
+
+  const loadStaffUsers = useCallback(async () => {
+    if (!token) return;
+    setStaffUsers(await api("/api/staff", {}, token));
+  }, [token]);
+
+  const loadPlanRequests = useCallback(async () => {
+    if (!token || !session?.user?.isOwner) return;
+    setPlanRequests(await api("/api/billing/requests?status=pending", {}, token));
+  }, [session?.user?.isOwner, token]);
 
   const loadConversation = useCallback(async id => {
     setIsLoading(true);
@@ -752,6 +1015,14 @@ function AdminInbox() {
   useEffect(() => {
     loadAutomations();
   }, [loadAutomations]);
+
+  useEffect(() => {
+    loadStaffUsers();
+  }, [loadStaffUsers]);
+
+  useEffect(() => {
+    loadPlanRequests();
+  }, [loadPlanRequests]);
 
   const playPopSound = useCallback((force = false) => {
     if (!force) return;
@@ -915,6 +1186,68 @@ function AdminInbox() {
     setProject({ ...fallbackProject, ...data, theme: { ...fallbackProject.theme, ...data.theme } });
   }
 
+  async function saveBilling(nextProject = project) {
+    setBillingStatus("Saving...");
+    try {
+      const data = await api("/api/projects/current/billing", {
+        method: "PATCH",
+        body: JSON.stringify({
+          plan: nextProject.plan,
+          billingStatus: nextProject.billingStatus
+        })
+      }, token);
+      setProject({ ...fallbackProject, ...data, theme: { ...fallbackProject.theme, ...data.theme } });
+      setBillingStatus("Saved");
+    } catch (err) {
+      setBillingStatus(err.error || "Could not save billing.");
+    }
+  }
+
+  async function addStaffUser(event) {
+    event.preventDefault();
+    setStaffStatus("Adding...");
+    try {
+      const data = await api("/api/staff", {
+        method: "POST",
+        body: JSON.stringify(staffForm)
+      }, token);
+      setStaffUsers(data);
+      setStaffForm({ email: "", password: "", role: "agent" });
+      setStaffStatus("Teammate added. Share the temporary password privately.");
+    } catch (err) {
+      setStaffStatus(err.error || "Could not add teammate.");
+    }
+  }
+
+  async function removeStaffUser(userId) {
+    setStaffStatus("Removing...");
+    try {
+      await api(`/api/staff/${userId}`, { method: "DELETE" }, token);
+      await loadStaffUsers();
+      setStaffStatus("Teammate removed.");
+    } catch (err) {
+      setStaffStatus(err.error || "Could not remove teammate.");
+    }
+  }
+
+  async function reviewPlanRequest(requestId, action) {
+    setPlanRequestAdminStatus(action === "approve" ? "Approving request..." : "Rejecting request...");
+    try {
+      await api(`/api/billing/requests/${requestId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ action })
+      }, token);
+      await loadPlanRequests();
+      if (action === "approve") {
+        const data = await api("/api/projects/current", {}, token);
+        setProject({ ...fallbackProject, ...data, theme: { ...fallbackProject.theme, ...data.theme } });
+      }
+      setPlanRequestAdminStatus(action === "approve" ? "Request approved and plan updated." : "Request rejected.");
+    } catch (err) {
+      setPlanRequestAdminStatus(err.error || "Could not review request.");
+    }
+  }
+
   async function draftAiReply() {
     if (!selectedId) return;
     setAiDraftStatus("Drafting...");
@@ -930,6 +1263,11 @@ function AdminInbox() {
   function updateTheme(updates) {
     setProject(current => ({ ...current, theme: { ...current.theme, ...updates } }));
     setSettingsStatus("");
+  }
+
+  function updateProjectPlan(updates) {
+    setProject(current => ({ ...current, ...updates }));
+    setBillingStatus("");
   }
 
   const stats = useMemo(() => ({
@@ -992,7 +1330,7 @@ function AdminInbox() {
               <div>
                 <span className={`thread-status ${selected.status}`}>{selected.status}</span>
                 <h1>{selected.x_username || selected.name || "Customer"}</h1>
-                <p>{selected.email || "No email"} - {selected.wallet || "No wallet or order ref"}</p>
+                <p>{selected.email || "No email"} - {selected.wallet || "No wallet"}</p>
               </div>
 
               <div className="status-buttons" aria-label="Ticket status">
@@ -1037,10 +1375,82 @@ function AdminInbox() {
 
           <div className="detail-list">
             <div><span>Project name</span><strong>{project.name}</strong></div>
+            <div><span>Plan</span><strong>{project.plan} - {String(project.billingStatus || "").replace("_", " ")}</strong></div>
             <div><span>Widget key</span><strong>{project.widgetKey}</strong></div>
             <div><span>Install script</span><code>{`<script src="${API_URL}/widget.js" data-key="${project.widgetKey}"></script>`}</code></div>
           </div>
           <button type="button" className="sound-test" onClick={rotateWidgetKey}>Rotate widget key</button>
+        </section>
+
+        <section>
+          <h2>Plan approval</h2>
+          <p className="muted">Review incoming pricing requests here. Approved requests update the active workspace plan and unlock the backend limits for that tier.</p>
+          <label className="settings-field">Plan
+            <select value={project.plan || "free"} onChange={event => updateProjectPlan({ plan: event.target.value })}>
+              {pricingPlans.map(plan => <option key={plan.id} value={plan.id}>{plan.name} - {plan.price}</option>)}
+            </select>
+          </label>
+          <label className="settings-field">Access status
+            <select value={project.billingStatus || "owner_approved"} onChange={event => updateProjectPlan({ billingStatus: event.target.value })}>
+              {billingStatuses.map(status => <option key={status.value} value={status.value}>{status.label}</option>)}
+            </select>
+          </label>
+          <button type="button" className="sound-test" disabled={!session.user?.isOwner} onClick={() => saveBilling()}>Approve plan</button>
+          {!session.user?.isOwner && <p className="settings-status">Only the owner account can approve billing changes.</p>}
+          {billingStatus && <p className="settings-status">{billingStatus}</p>}
+
+          {session.user?.isOwner && (
+            <div className="request-review-list">
+              <div className="settings-heading-row">
+                <h3>Pending requests</h3>
+                <button type="button" className="small-button" onClick={loadPlanRequests}>Refresh</button>
+              </div>
+              {planRequests.length === 0 && <p className="muted">No pending requests.</p>}
+              {planRequests.map(request => (
+                <article key={request.id}>
+                  <div>
+                    <strong>{request.companyName}</strong>
+                    <span>{request.planName} - {request.contactEmail}</span>
+                    {request.websiteUrl && <a href={request.websiteUrl} target="_blank" rel="noreferrer">{request.websiteUrl}</a>}
+                    {request.notes && <p>{request.notes}</p>}
+                  </div>
+                  <div>
+                    <button type="button" className="small-button" onClick={() => reviewPlanRequest(request.id, "approve")}>Approve</button>
+                    <button type="button" className="small-button danger" onClick={() => reviewPlanRequest(request.id, "reject")}>Reject</button>
+                  </div>
+                </article>
+              ))}
+              {planRequestAdminStatus && <p className="settings-status">{planRequestAdminStatus}</p>}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <h2>Team access</h2>
+          <p className="muted">Owners usually invite teammates by email. For this MVP, add their email with a temporary password.</p>
+          <form className="staff-form" onSubmit={addStaffUser}>
+            <label className="settings-field">Email<input type="email" required value={staffForm.email} onChange={event => setStaffForm({ ...staffForm, email: event.target.value })} /></label>
+            <label className="settings-field">Temporary password<input type="password" required minLength="10" value={staffForm.password} onChange={event => setStaffForm({ ...staffForm, password: event.target.value })} /></label>
+            <label className="settings-field">Role
+              <select value={staffForm.role} onChange={event => setStaffForm({ ...staffForm, role: event.target.value })}>
+                <option value="agent">Agent</option>
+                <option value="admin">Admin</option>
+              </select>
+            </label>
+            <button type="submit" className="sound-test">Add teammate</button>
+          </form>
+          <div className="staff-list">
+            {staffUsers.map(user => (
+              <div key={user.id}>
+                <span>
+                  <strong>{user.email}</strong>
+                  <small>{user.role}</small>
+                </span>
+                {user.id !== session.user?.id && <button type="button" className="small-button danger" onClick={() => removeStaffUser(user.id)}>Remove</button>}
+              </div>
+            ))}
+          </div>
+          {staffStatus && <p className="settings-status">{staffStatus}</p>}
         </section>
 
         <section>
@@ -1049,7 +1459,7 @@ function AdminInbox() {
             <div className="detail-list">
               <div><span>X username</span><strong>{selected.x_username || "Not provided"}</strong></div>
               <div><span>Email</span><strong>{selected.email || "Not provided"}</strong></div>
-              <div><span>Wallet / order</span><strong>{selected.wallet || "Not provided"}</strong></div>
+              <div><span>Wallet</span><strong>{selected.wallet || "Not provided"}</strong></div>
               <div><span>Source page</span><strong>{selected.page_url || "Unknown"}</strong></div>
             </div>
           ) : (
