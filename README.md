@@ -57,3 +57,18 @@ The backend creates checkout configurations with server-owned order metadata. Re
 `render.yaml` describes a single Node service with a persistent disk at `/var/data`, database `/var/data/support.sqlite`, health check `/health`, and manual deployment. Configure strong unique administrator credentials, owner email, stable integration encryption key, SMTP and Whop values in hosting secrets. `APP_URL` must be the public HTTPS origin; Render can supply it from `RENDER_EXTERNAL_URL`. If serving the client separately, set allowed origins with `CLIENT_URLS` and build with `VITE_API_URL`. Configure `TRUST_PROXY_HOPS` only to match the actual trusted proxy chain.
 
 Run `npm run backup` for an online SQLite backup; keep backups outside the public web root and verify restores. SQLite WAL mode supports this single-instance deployment; move to a shared database and queue before horizontal scaling. Real mail delivery, payment checkout, webhook recovery, persistent-disk restoration and a public browser test are required launch checks. Avoid relying only on environment presence or mocked tests as proof of production readiness.
+
+
+## Isolated customer pilot
+
+Run `npm run build` and then `npm run pilot`. Keep the terminal running while testing:
+
+- Customer website: http://localhost:4174
+- Isolated staff inbox: http://localhost:4100/admin
+- Pilot login: `.sandbox/LOGIN.txt` (created on startup; do not publish it)
+
+The sample Northline store has conversation scenarios, FAQs and a manual eight-step test checklist. It loads the actual embedded widget from a separate origin. Its backend binds only to loopback and stores test data in `.sandbox/pilot.sqlite`, separate from the main support database. The pilot workspace has Partner limits for trying team features; this is test access, not a Whop purchase. SMTP, billing credentials, Discord alerts and operator AI keys are disabled by the launcher. Teams can optionally connect their own AI provider; doing so makes real provider calls and incurs their provider's charges.
+
+Both sites persist data between runs. Ctrl+C stops both. Restarting does not erase tests. If ports are occupied, set `PILOT_API_PORT` and `PILOT_SITE_PORT` to unused ports. The site's static server serves only its named public files and public runtime identifiers; credentials and SQLite are never served. `npm run pilot` does not publish an Internet-accessible website. A shareable Alphabot pilot still needs a public host, secure credentials and the production launch checks above.
+
+The embedded widget supports isolated Shadow DOM styling, customer identity/draft recovery during refreshes of message content, image attachments, automatic message polling, retry indicators, accessible controls and storage-denied sessions. Client request IDs deduplicate retries of the same widget send. Conversation persistence across page refresh requires browser storage; unsent drafts persist in memory during the current visit. Browser checks confirmed first message, staff reply without refresh and preservation of an unsent draft. Browser image-upload verification was interrupted by the browser connection; it still needs a manual pilot check.

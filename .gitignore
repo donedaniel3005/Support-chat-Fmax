@@ -9,3 +9,6 @@ backups/
 *.sqlite
 *.sqlite3
 team-integrations-*.jpg
+
+.sandbox/
+pilot-preview*.jpg

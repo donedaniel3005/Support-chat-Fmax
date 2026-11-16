@@ -206,6 +206,8 @@ CREATE TABLE IF NOT EXISTS plan_requests (
 );
 `);
 
+db.exec("CREATE TABLE IF NOT EXISTS client_requests (project_id TEXT NOT NULL, request_key TEXT NOT NULL, conversation_id TEXT NOT NULL, message_id TEXT, PRIMARY KEY(project_id, request_key))");
+
 db.exec("CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id); CREATE INDEX IF NOT EXISTS conversations_project_idx ON conversations(project_id, updated_at)");
 
 function now() {
@@ -525,6 +527,7 @@ async function sendDiscordAlert(conversation, message) {
     await fetch(DISCORD_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(10000),
       body: JSON.stringify({
         content: `New support conversation\nProject: ${conversation.projectName || "Support"}\nCustomer: ${conversation.name || "Unknown"}\nEmail: ${conversation.email || "N/A"}\nX username: ${conversation.xUsername || "N/A"}\nMessage: ${message}`
       })
@@ -771,7 +774,7 @@ app.get("/widget-demo", (req, res) => {
 });
 
 app.get("/widget.js", (req, res) => {
-  res.type("application/javascript").send(widgetScript());
+  res.set("Cache-Control", "public, max-age=300").type("application/javascript").sendFile(path.join(__dirname, "widget.js"));
 });
 
 app.get("/api/projects/current", requireAdmin, (req, res) => {
@@ -1005,12 +1008,22 @@ app.post("/api/conversations", requireWidgetProject, async (req, res) => {
   const { name, email, wallet, xUsername, screenshotUrl, pageUrl, userAgent, firstMessage } = req.body;
   const attachments = cleanAttachments(req.body.attachments);
 
-  if (typeof firstMessage !== "string" || !firstMessage.trim() || firstMessage.length > 10000) {
+  if (typeof firstMessage !== "string" || (!firstMessage.trim() && !attachments.length) || firstMessage.length > 10000) {
     return res.status(400).json({ error: "First message is required." });
   }
 
   if (typeof xUsername !== "string" || !xUsername.trim() || xUsername.length > 120) {
     return res.status(400).json({ error: "X username is required." });
+  }
+
+  for (const [field, max] of [["name",120],["email",160],["wallet",240],["pageUrl",2048],["screenshotUrl",3500000],["userAgent",4096]]) {
+    if (req.body[field] != null && (typeof req.body[field] !== "string" || req.body[field].length > max)) return res.status(400).json({ error: "Invalid " + field + "." });
+  }
+  const requestId = req.body.clientRequestId;
+  if (requestId != null && (typeof requestId !== "string" || !/^[a-zA-Z0-9_-]{16,80}$/.test(requestId))) return res.status(400).json({ error: "Invalid request identifier." });
+  if (requestId) {
+    const previous = db.prepare("SELECT conversation_id FROM client_requests WHERE project_id = ? AND request_key = ?").get(req.projectId, "new:" + requestId);
+    if (previous) return res.status(201).json(getConversationFull(previous.conversation_id, req.projectId));
   }
 
   const allowance = requireConversationAllowance(req.project);
@@ -1055,7 +1068,9 @@ app.post("/api/conversations", requireWidgetProject, async (req, res) => {
   const full = getConversationFull(conversationId, req.projectId);
   emitProject(req.projectId, "conversation:new", full);
   emitProject(req.projectId, "inbox:message", full.messages.find(message => message.sender_type === "user"));
-  await sendDiscordAlert({ projectName: req.project.name, name, email, xUsername }, firstMessage.trim());
+  if (requestId) db.prepare("INSERT INTO client_requests VALUES (?, ?, ?, ?)").run(req.projectId, "new:" + requestId, conversationId, null);
+  // Alert delivery must not delay the customer's confirmation or trigger duplicate retries.
+  sendDiscordAlert({ projectName: req.project.name, name, email, xUsername }, firstMessage.trim()).catch(() => {});
 
   res.status(201).json(full);
 });
@@ -1116,6 +1131,14 @@ app.post("/api/conversations/:id/messages", requireConversationAccess, (req, res
   const conversation = db.prepare("SELECT id FROM conversations WHERE id = ? AND project_id = ?").get(req.params.id, req.projectId);
   if (!conversation) return res.status(404).json({ error: "Conversation not found." });
 
+  const requestId = req.body.clientRequestId;
+  if (requestId != null && (typeof requestId !== "string" || !/^[a-zA-Z0-9_-]{16,80}$/.test(requestId))) return res.status(400).json({ error: "Invalid request identifier." });
+  const requestKey = "reply:" + req.params.id + ":" + requestId;
+  if (requestId) {
+    const previous = db.prepare("SELECT message_id FROM client_requests WHERE project_id = ? AND request_key = ?").get(req.projectId, requestKey);
+    if (previous) return res.status(201).json(formatMessage(db.prepare("SELECT * FROM messages WHERE id = ?").get(previous.message_id)));
+  }
+
   const message = insertMessage({
     conversationId: req.params.id,
     senderType,
@@ -1124,6 +1147,7 @@ app.post("/api/conversations/:id/messages", requireConversationAccess, (req, res
     attachments
   });
 
+  if (requestId) db.prepare("INSERT INTO client_requests VALUES (?, ?, ?, ?)").run(req.projectId, requestKey, req.params.id, message.id);
   db.prepare("UPDATE conversations SET updated_at = ?, status = CASE WHEN ? = 'user' AND status = 'closed' THEN 'open' ELSE status END WHERE id = ?").run(now(), senderType, req.params.id);
   emitProject(req.projectId, "inbox:message", message);
   io.to(req.params.id).emit("message:new", message);
@@ -1201,111 +1225,7 @@ io.on("connection", socket => {
   socket.on("project:leave", id => socket.leave(`project:${id}`));
 });
 
-function widgetScript() {
-  return `
-(function () {
-  var script = document.currentScript;
-  var widgetKey = script && (script.getAttribute("data-key") || script.dataset.key);
-  var apiUrl = (script && (script.getAttribute("data-api") || script.dataset.api)) || new URL(script.src).origin;
-  if (!widgetKey || document.getElementById("support-chat-platform-widget")) return;
-
-  var root = document.createElement("div");
-  root.id = "support-chat-platform-widget";
-  document.body.appendChild(root);
-
-  var state = { open: false, config: null, conversationId: localStorage.getItem("support-widget-conversation-" + widgetKey) || "", messages: [], draft: "", error: "", sending: false };
-  var css = document.createElement("style");
-  css.textContent = "#support-chat-platform-widget *{box-sizing:border-box;font-family:Arial,sans-serif}.scp-launcher{position:fixed;bottom:24px;width:62px;height:62px;border:0;border-radius:50%;z-index:2147483000;box-shadow:0 18px 50px rgba(15,23,42,.28);cursor:pointer}.scp-panel{position:fixed;bottom:98px;width:380px;max-width:calc(100vw - 28px);height:590px;max-height:calc(100vh - 122px);z-index:2147482999;border-radius:18px;overflow:hidden;box-shadow:0 24px 80px rgba(15,23,42,.32);display:flex;flex-direction:column}.scp-head{padding:18px;color:#fff}.scp-head strong,.scp-head small{display:block}.scp-head small{opacity:.72;margin-top:4px}.scp-body{flex:1;background:#fff;color:#111827;overflow:auto;padding:16px;display:grid;align-content:start;gap:10px}.scp-msg{max-width:84%;padding:10px 12px;border-radius:14px;background:#eef2f7;line-height:1.4}.scp-msg.user{justify-self:end;color:#fff}.scp-form{background:#fff;border-top:1px solid #e5e7eb;padding:12px;display:grid;gap:8px}.scp-form input,.scp-form textarea{width:100%;border:1px solid #d1d5db;border-radius:10px;padding:10px;font:inherit}.scp-form textarea{min-height:74px;resize:vertical}.scp-form button{border:0;border-radius:10px;padding:11px 12px;color:#fff;font-weight:800;cursor:pointer}.scp-hidden{display:none}";
-  document.head.appendChild(css);
-
-  function escapeHtml(value) {
-    return String(value || "").replace(/[&<>"']/g, function (char) {
-      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char];
-    });
-  }
-
-  function api(path, options) {
-    options = options || {};
-    options.headers = Object.assign({ "Content-Type": "application/json", "X-Widget-Key": widgetKey }, options.headers || {});
-    return fetch(apiUrl + path, options).then(function (res) { return res.json().then(function (data) { if (!res.ok) throw data; return data; }); });
-  }
-
-  function render() {
-    var theme = (state.config && state.config.theme) || {};
-    var side = theme.position === "left" ? "left" : "right";
-    var accent = theme.accentColor || "#14b8a6";
-    var panel = theme.panelColor || "#0b1220";
-    var text = theme.textColor || "#f8fafc";
-    root.innerHTML =
-      '<button class="scp-launcher" style="' + side + ':24px;background:' + (theme.launcherColor || accent) + ';color:' + text + '" aria-label="Open support">Chat</button>' +
-      '<section class="scp-panel ' + (state.open ? "" : "scp-hidden") + '" style="' + side + ':24px;background:' + panel + '">' +
-        '<div class="scp-head" style="background:' + panel + ';color:' + text + '"><strong>' + escapeHtml(theme.brandName || "Support") + '</strong><small>' + escapeHtml(theme.replyTime || "We typically reply soon") + '</small></div>' +
-        '<div class="scp-body">' + (state.messages.length ? state.messages.map(function (message) {
-          return '<div class="scp-msg ' + escapeHtml(message.sender_type) + '" style="' + (message.sender_type === "user" ? "background:" + accent : "") + '">' + escapeHtml(message.body) + '</div>';
-        }).join("") : '<div class="scp-msg">' + escapeHtml(theme.greeting || "Hi, how can we help?") + '</div>') + '</div>' +
-        '<form class="scp-form">' + (!state.conversationId ? '<input name="xUsername" aria-label="Customer ID" required placeholder="X username or customer ID"><input name="email" aria-label="Email" type="email" placeholder="Email">' : '') + '<textarea name="message" aria-label="Message" required maxlength="10000" placeholder="Type your message...">' + escapeHtml(state.draft) + '</textarea>' + (state.error ? '<small role="alert" style="color:#b91c1c">' + escapeHtml(state.error) + '</small>' : '') + '<button ' + (state.sending ? 'disabled ' : '') + 'style="background:' + accent + '">' + (state.sending ? 'Sending…' : 'Send') + '</button></form>' +
-      '</section>';
-
-    root.querySelector(".scp-launcher").onclick = function () { state.open = !state.open; render(); };
-    root.querySelector(".scp-form")?.addEventListener("submit", submitMessage);
-    root.querySelector("textarea").oninput = function (event) { state.draft = event.target.value; };
-  }
-
-  setInterval(function () {
-    if (!state.open || !state.conversationId) return;
-    api("/api/conversations/" + state.conversationId).then(function (conversation) {
-      if (JSON.stringify(state.messages) === JSON.stringify(conversation.messages)) return;
-      var input = root.querySelector("textarea");
-      var focused = document.activeElement === input;
-      var caret = input?.selectionStart || 0;
-      var draft = input?.value || "";
-      state.messages = conversation.messages || [];
-      render();
-      root.querySelector("textarea").value = draft;
-      if (focused) { root.querySelector("textarea").focus(); root.querySelector("textarea").setSelectionRange(caret, caret); }
-      root.querySelector(".scp-body").scrollTop = root.querySelector(".scp-body").scrollHeight;
-    }).catch(function () {});
-  }, 3000);
-
-  function submitMessage(event) {
-    event.preventDefault();
-    var form = event.target;
-    var message = form.message.value.trim();
-    if (!message || state.sending) return;
-    state.sending = true; state.error = "";
-    form.querySelector("button").disabled = true;
-    var request = state.conversationId
-      ? api("/api/conversations/" + state.conversationId + "/messages", { method: "POST", body: JSON.stringify({ senderType: "user", body: message, widgetKey: widgetKey }) })
-      : api("/api/conversations", { method: "POST", body: JSON.stringify({ widgetKey: widgetKey, xUsername: form.xUsername.value, email: form.email.value, firstMessage: message, pageUrl: location.href, userAgent: navigator.userAgent }) });
-    request.then(function (data) {
-      if (data.id && data.messages) {
-        state.conversationId = data.id;
-        state.messages = data.messages;
-        localStorage.setItem("support-widget-conversation-" + widgetKey, data.id);
-      } else {
-        state.messages.push(data);
-      }
-      state.sending = false; state.draft = ""; state.error = "";
-      render();
-    }).catch(function (error) { state.sending = false; state.error = error.error || "Connection interrupted. Your message is still here — please try sending again."; render(); });
-  }
-
-  api("/api/widget/config?widgetKey=" + encodeURIComponent(widgetKey)).then(function (config) {
-    state.config = config;
-    if (state.conversationId) {
-      api("/api/conversations/" + state.conversationId + "?widgetKey=" + encodeURIComponent(widgetKey)).then(function (conversation) {
-        state.messages = conversation.messages || [];
-        render();
-      }).catch(render);
-    } else {
-      render();
-    }
-  }).catch(function () { root.remove(); });
-}());
-`;
-}
-
-server.listen(PORT, () => {
+server.listen(PORT, process.env.HOST || "0.0.0.0", () => {
   const project = getDefaultProject();
   console.log(`${PRODUCT_NAME} backend running on http://localhost:${PORT}`);
   console.log(`Default widget key: ${project.widgetKey}`);

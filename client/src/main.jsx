@@ -742,6 +742,8 @@ function AdminInbox() {
   const [sendingReply, setSendingReply] = useState(false);
   const selectedRequestRef = useRef(0);
   const selectedIdRef = useRef(null);
+  const replyRef = useRef(reply);
+  replyRef.current = reply;
   const inboxRequestRef = useRef(0);
 
   const hydrateSession = useCallback(async activeToken => {
@@ -791,7 +793,7 @@ function AdminInbox() {
   const loadConversation = useCallback(async (id, background = false) => {
     const request = ++selectedRequestRef.current;
     selectedIdRef.current = id;
-    if (!background) { setIsLoading(true); setSelectedId(id); setSelected(null); setReply(""); setReplyAttachments([]); }
+    if (!background) { setIsLoading(true); setSelectedId(id); setSelected(null); setReply(""); setReplyAttachments([]); setAiDraftStatus(""); }
     try {
       const data = await api(`/api/conversations/${id}`, {}, token);
       if (request !== selectedRequestRef.current || selectedIdRef.current !== id) return;
@@ -1014,9 +1016,12 @@ function AdminInbox() {
     setAiDraftStatus("Drafting...");
     try {
       const data = await api(`/api/conversations/${selectedId}/ai-draft`, { method: "POST", body: "{}" }, token);
+      if (selectedIdRef.current !== selectedId) return;
+      if (replyRef.current !== reply) { setAiDraftStatus("Your reply changed while AI was drafting. Your edits were kept; request another draft when ready."); return; }
       setReply(data.draft);
       setAiDraftStatus(`Drafted with ${data.provider}. Review before sending.`);
     } catch (err) {
+      if (selectedIdRef.current !== selectedId) return;
       setAiDraftStatus(err.error || "Could not draft reply.");
     }
   }
@@ -1141,7 +1146,7 @@ function AdminInbox() {
                 {aiDraftStatus && <p className="settings-status">{aiDraftStatus}</p>}
               </div>
               <div className="reply-actions">
-                <button type="button" className="secondary-action" onClick={draftAiReply}>AI draft</button>
+                <button type="button" className="secondary-action" disabled={aiDraftStatus === "Drafting..."} onClick={draftAiReply}>AI draft</button>
                 <button type="submit" disabled={sendingReply || (!reply.trim() && replyAttachments.length === 0)}>{sendingReply ? "Sending…" : "Send reply"}</button>
               </div>
             </form>

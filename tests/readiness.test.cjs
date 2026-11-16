@@ -35,8 +35,12 @@ test('launch readiness: onboarding, inbox, saved replies, isolation, realtime an
   const config = await request('/api/widget/config', { key }); assert.equal(config.theme.brandName, 'Acme Help'); assert.equal(config.secretKey, undefined);
   const demo = await fetch(base + '/widget-demo?key=' + key); assert.equal(demo.status, 200); assert.match(await demo.text(), /widget.js/);
   await request('/api/conversations', { key, method: 'POST', body: { xUsername: 'tester', firstMessage: {} }, status: 400 });
-  const ticket = await request('/api/conversations', { key, method: 'POST', body: { xUsername: 'tester', email: 'customer@acme.example', firstMessage: 'Unusual invoice question', pageUrl: base + '/widget-demo?key=' + key }, status: 201 });
+  const ticket = await request('/api/conversations', { key, method: 'POST', body: { clientRequestId: 'pilot-create-request-001', xUsername: 'tester', email: 'customer@acme.example', firstMessage: 'Unusual invoice question', pageUrl: base + '/widget-demo?key=' + key }, status: 201 });
   assert.equal(ticket.messages.length, 2);
+  const retryTicket = await request('/api/conversations', { key, method: 'POST', body: { clientRequestId: 'pilot-create-request-001', xUsername: 'tester', firstMessage: 'Unusual invoice question' }, status: 201 });
+  assert.equal(retryTicket.id, ticket.id);
+  assert.equal((await request('/api/conversations', { token })).length, 1);
+  await request('/api/conversations', { key, method: 'POST', body: { xUsername: 'tester', firstMessage: 'hello', email: { invalid: true } }, status: 400 });
   const activityBaseline = await request('/api/inbox/activity', { token });
   assert.equal(activityBaseline.messages.length, 0);
   assert.equal((await request('/api/conversations', { token }))[0].unread_count, 1);
@@ -72,6 +76,11 @@ test('launch readiness: onboarding, inbox, saved replies, isolation, realtime an
   const received = new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Realtime message timed out')), 3000); socket.once('message:new', message => { clearTimeout(timer); resolve(message); }); });
   await request('/api/conversations/' + ticket.id + '/messages', { token, method: 'POST', body: { senderType: 'agent', body: 'We can help with that invoice.' }, status: 201 });
   assert.equal((await received).body, 'We can help with that invoice.');
+  const replyBody = { clientRequestId: 'pilot-reply-request-001', senderType: 'user', body: 'Retry this once' };
+  const firstReply = await request('/api/conversations/' + ticket.id + '/messages', { key, method: 'POST', body: replyBody, status: 201 });
+  const repeatReply = await request('/api/conversations/' + ticket.id + '/messages', { key, method: 'POST', body: replyBody, status: 201 });
+  assert.equal(repeatReply.id, firstReply.id);
+  assert.equal((await request('/api/conversations/' + ticket.id, { token })).messages.filter(m => m.body === 'Retry this once').length, 1);
   await request('/api/conversations/' + ticket.id + '/status', { token, method: 'PATCH', body: { status: 'closed' } });
   assert.equal((await request('/api/conversations?status=open&q=invoice', { token })).length, 0);
   assert.equal((await request('/api/conversations?status=closed&q=invoice', { token })).length, 1);
