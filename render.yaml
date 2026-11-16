@@ -1,28 +1,35 @@
 services:
   - type: web
     name: 24-7support-backend
-    env: node
+    runtime: node
     plan: starter
-    buildCommand: npm install && npm run build
+    numInstances: 1
+    buildCommand: npm ci && npm ci --prefix client && npm run build
     startCommand: npm start
-    autoDeploy: true
+    healthCheckPath: /health
+    autoDeploy: false
     envVars:
       - key: NODE_ENV
         value: production
-      - key: CLIENT_URL
-        sync: false
-      - key: CLIENT_URLS
-        sync: false
+      - key: NODE_VERSION
+        value: '22'
+      - key: APP_URL
+        fromService:
+          type: web
+          name: 24-7support-backend
+          envVarKey: RENDER_EXTERNAL_URL
       - key: DATABASE_PATH
         value: /var/data/support.sqlite
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
-      - key: OPENAI_API_KEY
+      - key: INTEGRATION_ENCRYPTION_KEY
         sync: false
-      - key: DISCORD_WEBHOOK_URL
+      - key: OWNER_EMAIL
         sync: false
+      - key: WHOP_ENVIRONMENT
+        value: sandbox
     disk:
       name: support-data
       mountPath: /var/data

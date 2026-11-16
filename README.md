@@ -1,113 +1,59 @@
 # 24/7Support
 
-A downloadable Intercom-style support system for projects and companies. It includes an embeddable widget, a secured staff dashboard, project-level widget keys, theme settings, automation templates, realtime messaging, and basic AI-assisted support replies.
+A multi-workspace customer-support app with an embeddable widget, staff inbox, saved replies, personal light/dark/system appearance, workspace branding, optional team AI and signed outbound webhooks.
 
-## Features
+## Current launch status
 
-- Multi-project foundation with project records and widget keys
-- Standalone widget script: `<script src="https://your-domain.com/widget.js" data-key="..."></script>`
-- Secured agent support inbox with email/password login
-- Theme settings for brand name, colors, greeting, reply-time text, and widget position
-- Basic AI reply drafts using `OPENAI_API_KEY`, with local rule-based fallback
-- Realtime messages using Socket.io
-- SQLite database
-- Open / Pending / Closed conversation status
-- Customer metadata: name, email, wallet, page URL
-- Optional Discord webhook alert for new conversations
-- Editable automation templates and auto-replies
-- Manual staff teammate access from Admin
-- Pricing plan requests with owner review from Admin
-- Backend plan limits for staff seats, monthly conversations, paused workspaces, and AI drafts
+The application is running locally, not yet on a verified public production host. The public Whop product is https://whop.com/the-modern-communication-academy/24-7support. Public listing visibility does not mean automatic workspace provisioning is connected. Before inviting paying customers, finish hosting, SMTP, Whop credentials and plan mappings, then verify a real checkout and signed webhook grant. `npm run check:launch` checks configuration presence, not email delivery or payments.
 
-## Setup
+## Development and verification
 
-```bash
-npm run install:all
-npm run dev
-```
+Use Node 22. Run `npm ci`, `npm ci --prefix client`, then `npm run dev`. Open http://localhost:5173 and /admin; the backend listens on port 4000. Copy `.env.example` to `.env` for server settings. Local defaults are admin@example.com / admin12345; production refuses these defaults. Never publish `.env`, customer SQLite files, logs or backups.
 
-Open:
+Run `npm test` for tenant isolation, authentication/recovery, realtime inbox, billing, appearance and integration checks. Run `npm run build` for production assets; `npm start` serves API and built client together. Provider requests are mocked in automated tests; real customer AI credentials have not been exercised.
 
-- Customer widget demo: `http://localhost:5173`
-- Agent inbox: `http://localhost:5173/admin`
+## Customer workspaces and inbox
 
-Backend runs on:
+Registration creates a separate workspace, widget key and administrator. Admins manage teammates; agents cannot change workspace secrets or integrations. Backend limits are enforced: Free has 1 seat and 50 conversations/month; Starter has 3 seats and 500; Growth has 8 seats and 2,000; Partner has 20 seats and 10,000. Growth and Partner include optional AI drafts. Paused workspaces cannot use the widget.
 
-- `http://localhost:4000`
+The inbox supports search, open/pending/closed status, attachments, per-agent unread state, saved replies, socket reconnection and durable polling catch-up. Enable and test sound with a user gesture; browser autoplay rules require this. Desktop notifications require permission and the app open. Closed-browser push notifications are not implemented. Type `/` in the composer to search saved reply titles; Enter or Tab inserts the first match, and Escape clears the shortcut. Inserting a saved reply does not send it.
 
-Default local admin:
+## Appearance and widget installation
 
-```txt
-Email: admin@example.com
-Password: admin12345
-```
+Light, Dark and System appearance are personal settings saved in the browser, with system changes and cross-tab updates respected. Workspace branding offers preset colors and up to eight named custom themes. Widget colors belong to the workspace and are independent of the staff member's personal appearance.
 
-Set real credentials before deploying:
-
-```env
-PORT=4000
-CLIENT_URL=http://localhost:5173
-CLIENT_URLS=http://localhost:5173,https://your-domain.com
-DATABASE_PATH=./support.sqlite
-ADMIN_EMAIL=owner@your-company.com
-ADMIN_PASSWORD=use-a-long-password
-OWNER_EMAIL=danielkariuki3005@gmail.com
-OPENAI_API_KEY=
-DISCORD_WEBHOOK_URL=
-```
-
-## Team access and pricing
-
-Products like Intercom usually create a company workspace first, then the owner invites teammates by email and assigns roles. This MVP now supports the practical first version: an admin can add a teammate email with a temporary password from `/admin`, and remove that access later.
-
-The public site shows Free, Starter, Growth, and Partner tiers. Clients submit plan requests from the pricing page, and those requests appear in `/admin` for the configured `OWNER_EMAIL` to approve or reject. Approved requests update the active workspace plan.
-
-Backend limits are enforced by plan:
-
-- Free: 1 staff seat, 50 conversations/month, no AI drafts
-- Starter: 3 staff seats, 500 conversations/month, no AI drafts
-- Growth: 8 staff seats, 2,000 conversations/month, AI drafts
-- Partner: 20 staff seats, 10,000 conversations/month, AI drafts
-
-Paused workspaces cannot load the widget or create new conversations.
-
-## Widget install
-
-After logging in to `/admin`, copy the install script from the Project panel:
+Copy the install script from workspace settings:
 
 ```html
 <script src="https://your-domain.com/widget.js" data-key="your-widget-key"></script>
 ```
 
-The widget key tells the backend which project owns the conversation, so messages from different companies do not mix.
+Use `/widget-demo?key=YOUR_KEY` to test the embed. Treat widget keys as public installation identifiers; staff APIs require authentication. Rotate a compromised widget key in settings.
 
-## VPS install
+## Password recovery
 
-```bash
-git clone your-repo
-cd support-chat-mvp
-npm run install:all
-npm run build
-npm start
-```
+Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM`. Port 465 uses implicit TLS; other configured ports require STARTTLS. Gmail can use smtp.gmail.com with an app password; common transactional providers can use their SMTP credentials. Configure `APP_URL` to the public HTTPS origin so reset links point to the correct host. Password reset uses hashed single-use tokens with 30-minute expiry and revokes existing sessions. No reset link is logged. Missing SMTP returns an honest unavailable message. Verify delivery to a real mailbox before launch.
 
-For a VPS, put the app behind Nginx or Caddy, set HTTPS, and use a process manager such as PM2 or systemd.
+## Team AI
 
-## Production notes
+Workspace admins connect their own OpenAI, Anthropic or Google Gemini account under Settings > Integrations, enter an available model ID, and explicitly enable drafts. No operator/global API key is used as a fallback. Provider usage is billed to the team's own provider account. An agent's draft request sends the latest 12 message texts, capped at 24,000 characters, without attachments, to the selected provider. Agents review drafts before sending. Provider errors surface as errors, never fabricated fallback AI output.
 
-On Vercel, set the client environment variables:
+Set `INTEGRATION_ENCRYPTION_KEY` to a random 32-byte hexadecimal value on the server before accepting team API keys. Generate it with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. API keys are encrypted with AES-256-GCM, never returned in settings responses, and removed on disconnect. Preserve the encryption key securely with database backups. Changing or losing it requires teams to reconnect their providers. Never put it in a VITE_ variable.
 
-```bash
-VITE_API_URL=https://your-render-service.onrender.com
-VITE_WIDGET_KEY=your-widget-key
-```
+## Team webhooks
 
-The deployed agent inbox is:
+Workspace admins can add up to five public HTTPS endpoints on port 443 with IPv4 support. Supported events are `conversation.created`, `conversation.updated` and `message.created`. Message events contain customer/agent text; connect only team-authorized destinations. Private addresses, redirects and DNS rebinding are blocked by resolving and pinning public IPv4 addresses per connection.
 
-```bash
-https://your-vercel-domain.vercel.app/admin
-```
+The signing secret is shown once when an endpoint is added. Verify `X-Support-Signature` as `v1=` plus HMAC-SHA256(secret, `X-Support-Timestamp + "." + rawBody`). Reject stale timestamps and deduplicate `X-Support-Event-Id`. The database-backed queue retries failures up to six times with exponential backoff. Delivery metadata is visible in settings. Delivery is at least once for queued events. Each endpoint has a 1,000 pending-event cap; additional events are dropped while that cap is reached. Completed/failed payloads expire after seven days. Keep the database and backups private: they include customer messages and encrypted webhook signing credentials. Removing an endpoint also removes its queued deliveries.
 
-On Render, set either `CLIENT_URL` to your Vercel site URL, or `CLIENT_URLS` to a comma-separated list if you need both preview and production domains.
+## Whop payments and owner access
 
-For larger production use, replace SQLite with PostgreSQL or Supabase, add emailed invite links and password reset, connect real payment webhooks, and store widget assets behind your final domain.
+Use the Modern Communication Academy business, not Alphabot. Configure `WHOP_ENVIRONMENT`, `WHOP_API_KEY`, `WHOP_ACCOUNT_ID`, `WHOP_WEBHOOK_SECRET` and the three `WHOP_*_PLAN_ID` mappings. Start with sandbox testing; production business plans must be paired with production credentials and environment. Automatic checkout stays disabled when required configuration or the public production HTTPS URL is missing.
+
+The backend creates checkout configurations with server-owned order metadata. Register `/api/webhooks/whop` as the Whop webhook endpoint. Signatures, API version, business account, payment status, plan, order and current membership are checked before access changes. Events deduplicate and retry; cancellations reconcile current membership. The owner-only `/owner` page shows billing events, failures and audited manual plan adjustments. Customer billing controls show purchase/payment options without owner approval internals.
+
+## Production operations
+
+`render.yaml` describes a single Node service with a persistent disk at `/var/data`, database `/var/data/support.sqlite`, health check `/health`, and manual deployment. Configure strong unique administrator credentials, owner email, stable integration encryption key, SMTP and Whop values in hosting secrets. `APP_URL` must be the public HTTPS origin; Render can supply it from `RENDER_EXTERNAL_URL`. If serving the client separately, set allowed origins with `CLIENT_URLS` and build with `VITE_API_URL`. Configure `TRUST_PROXY_HOPS` only to match the actual trusted proxy chain.
+
+Run `npm run backup` for an online SQLite backup; keep backups outside the public web root and verify restores. SQLite WAL mode supports this single-instance deployment; move to a shared database and queue before horizontal scaling. Real mail delivery, payment checkout, webhook recovery, persistent-disk restoration and a public browser test are required launch checks. Avoid relying only on environment presence or mocked tests as proof of production readiness.

@@ -1,13 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { io } from "socket.io-client";
-import supportAiHero from "./assets/support-ai-hero.png";
 import "./styles.css";
+import { AppearanceProvider, AppearanceControl } from "./Appearance";
+import { readableText } from "./appearance-model.mjs";
+import MarketingPage from "./MarketingPage";
+import { OwnerConsole, WorkspaceBilling } from "./Billing";
+import Integrations from "./Integrations";
+import PasswordRecovery from "./PasswordRecovery";
+import { useInboxReliability } from "./useInboxReliability";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
-const WIDGET_KEY = import.meta.env.VITE_WIDGET_KEY || "demo_widget_key";
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? window.location.origin : "http://localhost:4000");
+let WIDGET_KEY = import.meta.env.VITE_WIDGET_KEY || "demo_widget_key";
 const AUTH_KEY = "support-admin-token";
-const CUSTOMER_TICKET_IDS_KEY = `support-customer-ticket-ids:${WIDGET_KEY}`;
+let CUSTOMER_TICKET_IDS_KEY = `support-customer-ticket-ids:${WIDGET_KEY}`;
 const PRODUCT_NAME = "24/7Support";
 const CONTACT_EMAIL = "danielkariuki3005@gmail.com";
 
@@ -18,113 +24,6 @@ const statusOptions = [
   { value: "open", label: "Open" },
   { value: "pending", label: "Pending" },
   { value: "closed", label: "Closed" }
-];
-
-const marketingFeatures = [
-  {
-    title: "Embeddable live chat",
-    body: "Drop one script into any website and launch a branded support widget connected to the right project."
-  },
-  {
-    title: "Secure staff dashboard",
-    body: "Protect customer conversations with staff login, project isolation, ticket status, and reply workflows."
-  },
-  {
-    title: "AI-assisted replies",
-    body: "Draft helpful responses from the conversation context, then let your team review and send."
-  },
-  {
-    title: "Theme control",
-    body: "Each client can customize brand name, colors, greeting text, launcher color, and widget feel."
-  },
-  {
-    title: "Automation templates",
-    body: "Save reusable support replies and auto-send the first response when a customer opens a ticket."
-  },
-  {
-    title: "Self-host ready",
-    body: "Install on a VPS, connect your database, set environment variables, and run it under your own domain."
-  }
-];
-
-const setupSteps = [
-  {
-    title: "Download the project",
-    body: "Clone the GitHub repo or download the ZIP, then open the project folder on your machine or server.",
-    code: "git clone https://github.com/donedaniel3005/Support-chat-Fmax.git",
-    link: "https://github.com/donedaniel3005/Support-chat-Fmax"
-  },
-  {
-    title: "Install and build",
-    body: "Install the backend and frontend packages, then create a production build.",
-    code: "cd Support-chat-Fmax\nnpm run install:all\nnpm run build"
-  },
-  {
-    title: "Create your environment file",
-    body: "Copy the example env file, set your admin login, and add your live frontend URL.",
-    code: "cp .env.example .env\nADMIN_EMAIL=you@company.com\nADMIN_PASSWORD=use-a-strong-password"
-  },
-  {
-    title: "Start the support server",
-    body: "Run the Node server locally, on a VPS, or on a backend host like Render or Railway.",
-    code: "npm start"
-  },
-  {
-    title: "Install the widget on a website",
-    body: "Copy the widget script from Admin and paste it before the closing body tag on the client website.",
-    code: `<script src="${API_URL}/widget.js" data-key="${WIDGET_KEY}"></script>`
-  },
-  {
-    title: "Customize and invite staff",
-    body: "Open Admin, set the theme, update automations, rotate widget keys when needed, and start replying."
-  }
-];
-
-const platformStats = [
-  { value: "1 script", label: "to install the widget" },
-  { value: "Multi-client", label: "project isolation" },
-  { value: "AI drafts", label: "for faster replies" }
-];
-
-const pricingPlans = [
-  {
-    id: "free",
-    name: "Free",
-    price: "$0",
-    cadence: "while testing",
-    description: "For small teams validating the widget before launch.",
-    features: ["1 website", "1 staff seat", "50 conversations/month", "Automated request review"]
-  },
-  {
-    id: "starter",
-    name: "Starter",
-    price: "$9",
-    cadence: "per month",
-    description: "Affordable live support for a solo operator or small business.",
-    features: ["1 website", "3 staff seats", "500 conversations/month", "Widget customization"]
-  },
-  {
-    id: "growth",
-    name: "Growth",
-    price: "$19",
-    cadence: "per month",
-    description: "For teams with steady customer volume and shared inbox needs.",
-    features: ["3 websites", "8 staff seats", "2,000 conversations/month", "AI drafts and automations"]
-  },
-  {
-    id: "partner",
-    name: "Partner",
-    price: "$39",
-    cadence: "per month",
-    description: "For agencies or operators managing multiple client sites.",
-    features: ["10 websites", "20 staff seats", "10,000 conversations/month", "Priority setup support"]
-  }
-];
-
-const billingStatuses = [
-  { value: "owner_approved", label: "Owner approved" },
-  { value: "pending_approval", label: "Pending approval" },
-  { value: "paused", label: "Paused" }
 ];
 
 const fallbackProject = {
@@ -160,7 +59,7 @@ async function api(path, options = {}, token = "") {
     }
   });
   const data = await res.json();
-  if (!res.ok) throw data;
+  if (!res.ok) throw { ...data, status: res.status };
   return data;
 }
 
@@ -364,213 +263,6 @@ function SupportMark() {
   );
 }
 
-function MarketingHome() {
-  const leadFeatures = marketingFeatures.slice(0, 4);
-  const [selectedPlan, setSelectedPlan] = useState("starter");
-  const [planRequest, setPlanRequest] = useState({
-    companyName: "",
-    contactEmail: "",
-    websiteUrl: "",
-    notes: ""
-  });
-  const [planRequestStatus, setPlanRequestStatus] = useState("");
-
-  async function submitPlanRequest(event) {
-    event.preventDefault();
-    setPlanRequestStatus("Submitting request...");
-
-    try {
-      await api("/api/billing/requests", {
-        method: "POST",
-        body: JSON.stringify({ ...planRequest, plan: selectedPlan })
-      });
-      setPlanRequest({ companyName: "", contactEmail: "", websiteUrl: "", notes: "" });
-      setPlanRequestStatus("Request sent. The team will review it from the admin workspace.");
-    } catch (err) {
-      setPlanRequestStatus(err.error || "Could not send plan request.");
-    }
-  }
-
-  return (
-    <main className="marketing-page">
-      <section className="marketing-hero">
-        <nav className="marketing-nav" aria-label="Marketing">
-          <strong>{PRODUCT_NAME}</strong>
-          <div>
-            <a href="#features">Features</a>
-            <a href="#pricing">Pricing</a>
-            <a href="#getting-started">Get started</a>
-            <a href="/admin">Admin</a>
-          </div>
-        </nav>
-
-        <div className="hero-grid">
-          <div className="hero-copy">
-            <span className="eyebrow">Features first support software</span>
-            <h1>{PRODUCT_NAME} helps teams support every client from one place.</h1>
-            <p>Launch branded chat widgets, protect admin access, draft faster replies with AI, and give every company its own project, key, theme, and inbox.</p>
-
-            <div className="hero-actions">
-              <a className="primary-link" href="/admin">Open admin</a>
-              <a className="secondary-link" href="#pricing">See pricing</a>
-            </div>
-
-            <div className="lead-feature-grid" aria-label="Top features">
-              {leadFeatures.map(feature => (
-                <article key={feature.title}>
-                  <strong>{feature.title}</strong>
-                  <span>{feature.body}</span>
-                </article>
-              ))}
-            </div>
-
-            <div className="hero-code">
-              <span>Widget install</span>
-              <code>{`<script src="${API_URL}/widget.js" data-key="${WIDGET_KEY}"></script>`}</code>
-            </div>
-          </div>
-
-          <div className="product-preview" aria-label="Product preview">
-            <img src={supportAiHero} alt="AI-powered support dashboard illustration" />
-            <div className="image-badge">
-              <strong>AI + human support</strong>
-              <span>Live chat, project keys, secure admin, and client themes.</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="stat-strip" aria-label="Platform highlights">
-        {platformStats.map(stat => (
-          <div key={stat.label}>
-            <strong>{stat.value}</strong>
-            <span>{stat.label}</span>
-          </div>
-        ))}
-      </section>
-
-      <section id="features" className="marketing-section">
-        <div className="section-heading">
-          <span className="eyebrow">Features</span>
-          <h2>A complete support stack companies can download and own.</h2>
-          <p>Built for agencies, SaaS teams, crypto projects, ecommerce stores, and service companies that want ownership of their customer support stack.</p>
-        </div>
-
-        <div className="feature-grid">
-          {marketingFeatures.map(feature => (
-            <article key={feature.title} className="feature-card">
-              <span aria-hidden="true" />
-              <h3>{feature.title}</h3>
-              <p>{feature.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section id="pricing" className="marketing-section pricing-section">
-        <div className="section-heading">
-          <span className="eyebrow">Pricing</span>
-          <h2>Affordable plans that can start free while clients test.</h2>
-          <p>Pick a plan and submit a request. The team reviews requests in the admin workspace and the backend automatically enforces each plan's limits.</p>
-        </div>
-
-        <div className="pricing-grid">
-          {pricingPlans.map(plan => (
-            <article key={plan.id} className={plan.id === "starter" ? "pricing-card highlighted" : "pricing-card"}>
-              <div>
-                <h3>{plan.name}</h3>
-                <p>{plan.description}</p>
-              </div>
-              <div className="price-row">
-                <strong>{plan.price}</strong>
-                <span>{plan.cadence}</span>
-              </div>
-              <ul>
-                {plan.features.map(feature => <li key={feature}>{feature}</li>)}
-              </ul>
-              <button type="button" onClick={() => setSelectedPlan(plan.id)}>Request {plan.name}</button>
-            </article>
-          ))}
-        </div>
-
-        <form className="plan-request-form" onSubmit={submitPlanRequest}>
-          <div>
-            <span className="eyebrow">Plan request</span>
-            <h3>Request {pricingPlans.find(plan => plan.id === selectedPlan)?.name || "a plan"}</h3>
-            <p>Requests go straight into the admin review queue. The team can approve, reject, or follow up by email.</p>
-          </div>
-
-          <label>Plan
-            <select value={selectedPlan} onChange={event => setSelectedPlan(event.target.value)}>
-              {pricingPlans.map(plan => <option key={plan.id} value={plan.id}>{plan.name} - {plan.price}</option>)}
-            </select>
-          </label>
-          <label>Company or project name
-            <input required value={planRequest.companyName} onChange={event => setPlanRequest({ ...planRequest, companyName: event.target.value })} />
-          </label>
-          <label>Email
-            <input type="email" required value={planRequest.contactEmail} onChange={event => setPlanRequest({ ...planRequest, contactEmail: event.target.value })} />
-          </label>
-          <label>Website
-            <input type="url" placeholder="https://example.com" value={planRequest.websiteUrl} onChange={event => setPlanRequest({ ...planRequest, websiteUrl: event.target.value })} />
-          </label>
-          <label>Notes
-            <textarea placeholder="Tell us what you need help supporting." value={planRequest.notes} onChange={event => setPlanRequest({ ...planRequest, notes: event.target.value })} />
-          </label>
-          <button type="submit">Send request</button>
-          {planRequestStatus && <p className="pricing-note">{planRequestStatus}</p>}
-        </form>
-
-        <p className="pricing-note">Clients can also email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> for setup, upgrades, or billing questions.</p>
-      </section>
-
-      <section id="getting-started" className="marketing-section setup-section">
-        <div className="section-heading">
-          <span className="eyebrow">Get started</span>
-          <h2>From download to live widget, step by step.</h2>
-          <p>Install 24/7Support yourself, deploy the backend, then paste one widget script into any company website.</p>
-          <div className="setup-actions">
-            <a className="primary-link" href="https://github.com/donedaniel3005/Support-chat-Fmax" target="_blank" rel="noreferrer">Download from GitHub</a>
-            <a className="secondary-link" href="/admin">Open admin</a>
-          </div>
-        </div>
-
-        <div className="setup-list">
-          {setupSteps.map((step, index) => (
-            <article key={step.title}>
-              <span>{index + 1}</span>
-              <div>
-                <h3>{step.title}</h3>
-                <p>{step.body}</p>
-                {step.code && <code>{step.code}</code>}
-                {step.link && <a href={step.link} target="_blank" rel="noreferrer">Open repository</a>}
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="marketing-section audience-section">
-        <div>
-          <span className="eyebrow">Team access</span>
-          <h2>Intercom-style admin access starts with invited teammates.</h2>
-        </div>
-        <p>In tools like Intercom, the company owner signs up, then invites teammates by email and assigns roles. This MVP now supports that core flow from Admin: add approved staff emails, give them a temporary password, and remove access when needed.</p>
-      </section>
-
-      <section className="final-cta">
-        <span className="eyebrow">Ready to test it?</span>
-        <h2>Open the support bubble, request a plan, or sign in to the admin dashboard.</h2>
-        <div className="hero-actions">
-          <a className="primary-link" href="/admin">Open admin</a>
-          <a className="secondary-link" href={`mailto:${CONTACT_EMAIL}`}>Email creator</a>
-          <button type="button" className="secondary-link" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>Back to top</button>
-        </div>
-      </section>
-    </main>
-  );
-}
-
 function CustomerWidget() {
   const [open, setOpen] = useState(false);
   const [activeWidgetView, setActiveWidgetView] = useState("inbox");
@@ -594,7 +286,7 @@ function CustomerWidget() {
   const [error, setError] = useState("");
 
   const theme = project.theme || fallbackProject.theme;
-  const widgetBrandName = PRODUCT_NAME;
+  const widgetBrandName = theme.brandName || PRODUCT_NAME;
 
   const loadCustomerTickets = useCallback(async () => {
     const ids = loadCustomerTicketIds();
@@ -619,7 +311,7 @@ function CustomerWidget() {
         .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
 
       setCustomerTickets(tickets);
-      saveCustomerTicketIds(tickets.map(ticket => ticket.id));
+      // Preserve saved ticket IDs during temporary network failures.
     } finally {
       setIsLoadingTickets(false);
     }
@@ -641,7 +333,7 @@ function CustomerWidget() {
     const ticketIds = customerTickets.map(ticket => ticket.id);
     if (ticketIds.length === 0) return;
 
-    ticketIds.forEach(ticketId => socket.emit("conversation:join", ticketId));
+    ticketIds.forEach(ticketId => socket.emit("conversation:join", { conversationId: ticketId, widgetKey: WIDGET_KEY }));
 
     const onCustomerTicketMessage = message => {
       if (!ticketIds.includes(message.conversation_id)) return;
@@ -670,7 +362,7 @@ function CustomerWidget() {
   useEffect(() => {
     if (!conversation?.id) return;
 
-    socket.emit("conversation:join", conversation.id);
+    socket.emit("conversation:join", { conversationId: conversation.id, widgetKey: WIDGET_KEY });
 
     const onNewMessage = message => {
       if (message.conversation_id !== conversation.id) return;
@@ -687,6 +379,21 @@ function CustomerWidget() {
       socket.off("message:new", onNewMessage);
     };
   }, [conversation?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    let stopped = false;
+    async function catchUp() {
+      await loadCustomerTickets();
+      if (conversation?.id) {
+        try { const latest = await widgetApi(`/api/conversations/${conversation.id}`); if (!stopped) { setMessages(latest.messages || []); setConversation(latest); } } catch { /* Keep the last confirmed messages and retry automatically. */ }
+      }
+    }
+    const rejoin = () => { if (conversation?.id) socket.emit("conversation:join", { conversationId: conversation.id, widgetKey: WIDGET_KEY }); void catchUp(); };
+    socket.on("connect", rejoin); window.addEventListener("online", rejoin); window.addEventListener("focus", catchUp);
+    const timer = setInterval(catchUp, 8000);
+    return () => { stopped = true; clearInterval(timer); socket.off("connect", rejoin); window.removeEventListener("online", rejoin); window.removeEventListener("focus", catchUp); };
+  }, [open, conversation?.id, loadCustomerTickets]);
 
   async function startConversation(event) {
     event.preventDefault();
@@ -722,7 +429,9 @@ function CustomerWidget() {
 
   async function sendReply(event) {
     event.preventDefault();
-    if ((!reply.trim() && replyAttachments.length === 0) || !conversation?.id) return;
+    if ((!reply.trim() && replyAttachments.length === 0) || !conversation?.id || isSubmitting) return;
+    setIsSubmitting(true); setError("");
+    try {
 
     const data = await widgetApi(`/api/conversations/${conversation.id}/messages`, {
       method: "POST",
@@ -738,6 +447,8 @@ function CustomerWidget() {
     setMessages(previousMessages => previousMessages.some(message => message.id === data.id) ? previousMessages : [...previousMessages, data]);
     setReply("");
     setReplyAttachments([]);
+    } catch (err) { setError(err.error || "Could not send. Your draft is saved; please try again."); }
+    finally { setIsSubmitting(false); }
   }
 
   async function selectCustomerTicket(ticketId) {
@@ -755,7 +466,7 @@ function CustomerWidget() {
 
   return (
     <>
-      <MarketingHome />
+      <MarketingPage />
 
       {open && (
         <div
@@ -878,7 +589,7 @@ function CustomerWidget() {
 
       <button
         className={`launcher ${open ? "open" : ""}`}
-        style={{ background: theme.launcherColor || theme.accentColor }}
+        style={{ background: theme.launcherColor || theme.accentColor, color: readableText(theme.launcherColor || theme.accentColor) }}
         type="button"
         aria-label={open ? "Close support" : "Open support"}
         onClick={() => setOpen(previousOpen => !previousOpen)}
@@ -891,6 +602,9 @@ function CustomerWidget() {
 }
 
 function LoginScreen({ onLogin }) {
+  const [recovery, setRecovery] = useState(window.location.pathname === "/admin/reset-password");
+  const [register, setRegister] = useState(new URLSearchParams(window.location.search).get("create") === "1");
+  const [workspaceName, setWorkspaceName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -902,6 +616,7 @@ function LoginScreen({ onLogin }) {
     setLoading(true);
 
     try {
+      if (register) await api("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password, name: workspaceName }) });
       const session = await api("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password })
@@ -915,9 +630,11 @@ function LoginScreen({ onLogin }) {
     }
   }
 
+  if (recovery) return <PasswordRecovery api={api} onBack={() => { window.history.replaceState(null, "", "/admin"); setRecovery(false); }} />;
   return (
     <main className="login-shell">
       <form className="login-panel" onSubmit={submit}>
+        <div className="login-appearance"><AppearanceControl /></div>
         <div className="login-brand-row">
           <span className="brand-glyph">S</span>
           <div>
@@ -926,16 +643,76 @@ function LoginScreen({ onLogin }) {
           </div>
         </div>
         <span className="eyebrow">Secure team sign-in</span>
-        <h1>Sign in to {PRODUCT_NAME}</h1>
-        <p>Use an approved staff account. Account owners add teammates by email from Admin, similar to Intercom-style workspace invites.</p>
+        <h1>{register ? "Create your workspace" : `Sign in to ${PRODUCT_NAME}`}</h1>
+        <p>{register ? "Start on the free plan, customize your widget, and send your first test message." : "Use your staff account, or create a free workspace to get started."}</p>
+        {register && <label>Workspace name<input required maxLength={120} value={workspaceName} onChange={event => setWorkspaceName(event.target.value)} /></label>}
         <label>Email<input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} /></label>
-        <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} /></label>
+        <label>Password<input type="password" autoComplete={register ? "new-password" : "current-password"} minLength={register ? 10 : undefined} maxLength={256} required value={password} onChange={event => setPassword(event.target.value)} /></label>
         {error && <p className="form-error">{error}</p>}
-        <button type="submit" disabled={loading}>{loading ? "Signing in..." : "Sign in"}</button>
+        <button type="submit" disabled={loading}>{loading ? "Please wait..." : register ? "Create workspace" : "Sign in"}</button>
+        <button type="button" className="secondary-action" onClick={() => { setRegister(!register); setError(""); }}>{register ? "Already have an account? Sign in" : "Create a free workspace"}</button>
+        {!register && <button type="button" className="secondary-action" onClick={() => setRecovery(true)}>Forgot password?</button>}
         <p className="login-help">Need access or free-tier approval? Email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.</p>
       </form>
     </main>
   );
+}
+
+const themePresets = [
+  { name: "Teal", accentColor: "#0f766e", launcherColor: "#0f766e", panelColor: "#0b1220", textColor: "#f8fafc" },
+  { name: "Green", accentColor: "#15803d", launcherColor: "#166534", panelColor: "#052e16", textColor: "#f0fdf4" },
+  { name: "Blue", accentColor: "#1d4ed8", launcherColor: "#1e40af", panelColor: "#0c1c38", textColor: "#eff6ff" },
+  { name: "Purple", accentColor: "#7e22ce", launcherColor: "#6b21a8", panelColor: "#251036", textColor: "#faf5ff" },
+  { name: "Rose", accentColor: "#be123c", launcherColor: "#9f1239", panelColor: "#30101d", textColor: "#fff1f2" }
+];
+function ThemeChooser({ theme, onChange }) {
+  const [customName, setCustomName] = useState("");
+  const customs = theme.customPresets || [];
+  const apply = preset => onChange({ ...preset, customPresets: customs });
+  return <div className="theme-chooser"><p>Pick a preset, or adjust the colors below and save your own. Save settings to apply it to your workspace.</p><div className="theme-swatches">{[...themePresets, ...customs].map(preset => <button key={preset.name} type="button" onClick={() => apply(preset)} style={{ borderColor: preset.accentColor }}><span style={{ background: preset.accentColor }} />{preset.name}</button>)}</div>
+    <label className="settings-field">Custom theme name<input value={customName} maxLength={32} onChange={event => setCustomName(event.target.value)} placeholder="e.g. Alphabot green" /></label>
+    <button type="button" className="small-button" disabled={!customName.trim() || customs.length >= 8} onClick={() => { const preset = { name: customName.trim(), ...Object.fromEntries(["accentColor", "launcherColor", "panelColor", "textColor"].map(key => [key, theme[key]])) }; onChange({ customPresets: [...customs.filter(item => item.name !== preset.name), preset] }); setCustomName(""); }}>Save colors as custom theme</button>
+    {customs.map(preset => <button key={preset.name} type="button" className="small-button" onClick={() => onChange({ customPresets: customs.filter(item => item.name !== preset.name) })}>Remove {preset.name}</button>)}
+    <div className="theme-live-preview" style={{ background: theme.panelColor, color: theme.textColor }}><strong>{theme.brandName}</strong><p>{theme.greeting}</p><span style={{ background: theme.accentColor, color: readableText(theme.accentColor) }}>Your support reply</span></div>
+  </div>;
+}
+
+function WorkspaceSetup({ project, token, onProject, onClose }) {
+  const [step, setStep] = useState(0);
+  const [draft, setDraft] = useState(() => ({ ...project, theme: { ...project.theme } }));
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const code = `<script src="${API_URL}/widget.js" data-key="${project.widgetKey}"></script>`;
+  const steps = ["Workspace", "Customize", "Install", "Test"];
+  async function save(event) {
+    event.preventDefault(); setBusy(true); setStatus("");
+    try {
+      const saved = await api("/api/projects/current", { method: "PUT", body: JSON.stringify(draft) }, token);
+      onProject(saved); setStep(current => current + 1);
+    } catch (err) { setStatus(err.error || "Could not save setup."); }
+    finally { setBusy(false); }
+  }
+  async function check() {
+    setBusy(true);
+    try {
+      const tickets = await api("/api/conversations", {}, token);
+      const test = tickets.find(ticket => ticket.page_url?.includes("/widget-demo"));
+      setVerified(Boolean(test));
+      setStatus(test ? "Test message received in your inbox. You’re ready to reply." : "No test message yet. Open Chat below and send one, then check again.");
+    } catch (err) { setStatus(err.error || "Could not check messages."); }
+    finally { setBusy(false); }
+  }
+  return <section className="workspace-setup" aria-label="Workspace setup">
+    <div className="settings-heading-row"><h2>Get your support inbox ready</h2><button type="button" className="small-button" onClick={onClose}>Do this later</button></div>
+    <ol className="setup-progress">{steps.map((label, index) => <li key={label} aria-current={index === step ? "step" : undefined}><button type="button" onClick={() => { setStep(index); setStatus(""); }}>{index + 1}. {label}</button></li>)}</ol>
+    {step < 2 ? <form onSubmit={save}>
+      {step === 0 ? <><p>Set the name and website for this workspace.</p><label>Workspace name<input required maxLength={120} value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><label>Website URL<input type="url" required placeholder="https://your-company.com" value={draft.websiteUrl || ""} onChange={event => setDraft({ ...draft, websiteUrl: event.target.value })} /></label></> : <><p>Make the widget feel like part of your website.</p><label>Brand name<input required maxLength={80} value={draft.theme.brandName} onChange={event => setDraft({ ...draft, theme: { ...draft.theme, brandName: event.target.value } })} /></label><label>Greeting<input required maxLength={140} value={draft.theme.greeting} onChange={event => setDraft({ ...draft, theme: { ...draft.theme, greeting: event.target.value } })} /></label><label>Accent color<input type="color" value={draft.theme.accentColor} onChange={event => setDraft({ ...draft, theme: { ...draft.theme, accentColor: event.target.value } })} /></label><label>Position<select value={draft.theme.position} onChange={event => setDraft({ ...draft, theme: { ...draft.theme, position: event.target.value } })}><option value="right">Right</option><option value="left">Left</option></select></label><div className="setup-preview" style={{ borderColor: draft.theme.accentColor }}><strong>{draft.theme.brandName}</strong><p>{draft.theme.greeting}</p></div></>}
+      <button type="submit" disabled={busy}>{busy ? "Saving…" : "Save and continue"}</button>
+    </form> : step === 2 ? <><p>Paste this before the closing body tag on your website.</p><pre><code>{code}</code></pre><div className="setup-actions"><button type="button" onClick={async () => { try { await navigator.clipboard.writeText(code); setCopied(true); } catch { setStatus("Select and copy the script above."); } }}>{copied ? "Copied" : "Copy install code"}</button><button type="button" onClick={() => { setStep(3); setStatus(""); }}>Continue to test</button></div></> : <><p>Send a message through your actual widget on the test page below.</p><iframe title="Test your support widget" src={`${API_URL}/widget-demo?key=${encodeURIComponent(project.widgetKey)}`} /><div className="setup-actions"><button type="button" disabled={busy} onClick={check}>Check for test message</button>{verified && <button type="button" onClick={onClose}>Finish setup and open inbox</button>}</div></>}
+    {status && <p role="status">{status}</p>}
+  </section>;
 }
 
 function AdminInbox() {
@@ -948,31 +725,58 @@ function AdminInbox() {
   const [reply, setReply] = useState("");
   const [replyAttachments, setReplyAttachments] = useState([]);
   const [statusFilter, setStatusFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [inboxError, setInboxError] = useState("");
+  const [showSetup, setShowSetup] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState("inbox");
+  const [settingsTab, setSettingsTab] = useState("appearance");
   const [automations, setAutomations] = useState([]);
   const [staffUsers, setStaffUsers] = useState([]);
   const [staffForm, setStaffForm] = useState({ email: "", password: "", role: "agent" });
   const [staffStatus, setStaffStatus] = useState("");
-  const [planRequests, setPlanRequests] = useState([]);
-  const [planRequestAdminStatus, setPlanRequestAdminStatus] = useState("");
-  const [billingStatus, setBillingStatus] = useState("");
   const [automationStatus, setAutomationStatus] = useState("");
   const [settingsStatus, setSettingsStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [aiDraftStatus, setAiDraftStatus] = useState("");
-  const soundContextRef = useRef(null);
+  const [sendingReply, setSendingReply] = useState(false);
+  const selectedRequestRef = useRef(0);
+  const selectedIdRef = useRef(null);
+  const inboxRequestRef = useRef(0);
 
   const hydrateSession = useCallback(async activeToken => {
     const data = await api("/api/auth/me", {}, activeToken);
     setSession(data);
     setProject({ ...fallbackProject, ...data.project, theme: { ...fallbackProject.theme, ...data.project.theme } });
-    socket.emit("project:join", data.project.id);
+    socket.emit("project:join", { projectId: data.project.id, token: activeToken });
   }, []);
 
   const loadConversations = useCallback(async () => {
     if (!token) return;
-    const url = statusFilter ? `/api/conversations?status=${statusFilter}` : "/api/conversations";
-    setConversations(await api(url, {}, token));
-  }, [statusFilter, token]);
+    const request = ++inboxRequestRef.current;
+    try {
+      const data = await api(`/api/conversations?${new URLSearchParams({ status: statusFilter, q: searchQuery })}`, {}, token);
+      if (request !== inboxRequestRef.current) return;
+      setConversations(data);
+      setInboxError("");
+    } catch (err) { if (request === inboxRequestRef.current) setInboxError(err.error || "Could not load inbox."); }
+  }, [statusFilter, searchQuery, token]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(search), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (!token || !session) return;
+    const join = () => {
+      socket.emit("project:join", { projectId: session.project.id, token });
+      if (selectedId) socket.emit("conversation:join", { conversationId: selectedId, token });
+    };
+    join();
+    socket.on("connect", join);
+    return () => socket.off("connect", join);
+  }, [token, session, selectedId]);
 
   const loadAutomations = useCallback(async () => {
     if (!token) return;
@@ -984,28 +788,37 @@ function AdminInbox() {
     setStaffUsers(await api("/api/staff", {}, token));
   }, [token]);
 
-  const loadPlanRequests = useCallback(async () => {
-    if (!token || !session?.user?.isOwner) return;
-    setPlanRequests(await api("/api/billing/requests?status=pending", {}, token));
-  }, [session?.user?.isOwner, token]);
-
-  const loadConversation = useCallback(async id => {
-    setIsLoading(true);
+  const loadConversation = useCallback(async (id, background = false) => {
+    const request = ++selectedRequestRef.current;
+    selectedIdRef.current = id;
+    if (!background) { setIsLoading(true); setSelectedId(id); setSelected(null); setReply(""); setReplyAttachments([]); }
     try {
       const data = await api(`/api/conversations/${id}`, {}, token);
-      setSelected(data);
-      setSelectedId(id);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [token]);
+      if (request !== selectedRequestRef.current || selectedIdRef.current !== id) return;
+      setSelected(data); setSelectedId(id);
+      if (workspaceView === "inbox" && !document.hidden && document.hasFocus()) await api(`/api/conversations/${id}/read`, { method: "POST", body: "{}" }, token);
+    } catch (err) { setInboxError(err.error || "Could not load ticket."); }
+    finally { if (request === selectedRequestRef.current) setIsLoading(false); }
+  }, [token, workspaceView]);
+
+  const reliability = useInboxReliability({ api, socket, token, projectId: session?.project?.id, onSync: async () => {
+    if (selectedIdRef.current) await loadConversation(selectedIdRef.current, true);
+    await loadConversations();
+  } });
 
   useEffect(() => {
     if (!token) return;
-    hydrateSession(token).catch(() => {
-      localStorage.removeItem(AUTH_KEY);
-      setToken("");
-    });
+    let stopped = false, timer;
+    async function restore() {
+      try { await hydrateSession(token); }
+      catch (err) {
+        if (stopped) return;
+        if (err.status === 401) { localStorage.removeItem(AUTH_KEY); setToken(""); setSession(null); }
+        else { setInboxError("Connection interrupted. Restoring your workspace automatically…"); timer = setTimeout(restore, 3000); }
+      }
+    }
+    void restore();
+    return () => { stopped = true; clearTimeout(timer); };
   }, [hydrateSession, token]);
 
   useEffect(() => {
@@ -1021,38 +834,8 @@ function AdminInbox() {
   }, [loadStaffUsers]);
 
   useEffect(() => {
-    loadPlanRequests();
-  }, [loadPlanRequests]);
-
-  const playPopSound = useCallback((force = false) => {
-    if (!force) return;
-    try {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContext) return;
-      if (!soundContextRef.current) soundContextRef.current = new AudioContext();
-      const context = soundContextRef.current;
-      const startAt = context.currentTime;
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(520, startAt);
-      oscillator.frequency.exponentialRampToValueAtTime(920, startAt + 0.06);
-      gain.gain.setValueAtTime(0.001, startAt);
-      gain.gain.exponentialRampToValueAtTime(0.18, startAt + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.2);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start(startAt);
-      oscillator.stop(startAt + 0.22);
-    } catch {
-      // Browsers can block audio until the admin interacts with the page.
-    }
-  }, []);
-
-  useEffect(() => {
     const handleNewConversation = conversation => {
       loadConversations();
-      playPopSound(true);
       if (!selectedId) loadConversation(conversation.id);
     };
 
@@ -1068,11 +851,11 @@ function AdminInbox() {
       socket.off("conversation:new", handleNewConversation);
       socket.off("conversation:updated", handleUpdatedConversation);
     };
-  }, [loadConversations, loadConversation, playPopSound, selectedId]);
+  }, [loadConversations, loadConversation, selectedId]);
 
   useEffect(() => {
     if (!selectedId) return;
-    socket.emit("conversation:join", selectedId);
+    socket.emit("conversation:join", { conversationId: selectedId, token });
 
     const onNewMessage = message => {
       if (message.conversation_id !== selectedId) return;
@@ -1081,7 +864,6 @@ function AdminInbox() {
         const alreadyAdded = previousConversation.messages.some(existingMessage => existingMessage.id === message.id);
         return alreadyAdded ? previousConversation : { ...previousConversation, messages: [...previousConversation.messages, message] };
       });
-      if (message.sender_type === "user") playPopSound(true);
     };
 
     socket.on("message:new", onNewMessage);
@@ -1089,21 +871,26 @@ function AdminInbox() {
       socket.emit("conversation:leave", selectedId);
       socket.off("message:new", onNewMessage);
     };
-  }, [playPopSound, selectedId]);
+  }, [selectedId, token]);
 
   function handleLogin(nextSession) {
     setToken(nextSession.token);
     setSession(nextSession);
     setProject({ ...fallbackProject, ...nextSession.project, theme: { ...fallbackProject.theme, ...nextSession.project.theme } });
-    socket.emit("project:join", nextSession.project.id);
+    socket.emit("project:join", { projectId: nextSession.project.id, token: nextSession.token });
   }
 
   async function logout() {
     try {
       await api("/api/auth/logout", { method: "POST", body: "{}" }, token);
     } finally {
+      socket.disconnect();
+      socket.connect();
       localStorage.removeItem(AUTH_KEY);
       setToken("");
+      setSelected(null);
+      setSelectedId(null);
+      setConversations([]);
       setSession(null);
     }
   }
@@ -1126,24 +913,33 @@ function AdminInbox() {
 
   async function sendAgentReply(event) {
     event.preventDefault();
-    const sent = await sendAgentMessage(reply, replyAttachments);
-    if (sent) {
-      setReply("");
-      setReplyAttachments([]);
-    }
+    if (sendingReply) return;
+    setSendingReply(true);
+    try {
+      const sent = await sendAgentMessage(reply, replyAttachments);
+      if (sent) {
+        setReply("");
+        setReplyAttachments([]);
+        await loadConversation(selectedId);
+        await loadConversations();
+      }
+    } catch (err) { setInboxError(err.error || "Could not send reply. Your draft is preserved; try again."); }
+    finally { setSendingReply(false); }
   }
 
   async function updateStatus(status) {
     if (!selectedId) return;
-    setSelected(await api(`/api/conversations/${selectedId}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status })
-    }, token));
+    try {
+      setSelected(await api(`/api/conversations/${selectedId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status })
+      }, token));
+      await loadConversations();
+    } catch (err) { setInboxError(err.error || "Could not change status."); }
   }
 
   async function runAutomation(template) {
-    const sent = await sendAgentMessage(template.body);
-    if (sent) setReply("");
+    setReply(current => current ? `${current}\n\n${template.body}` : template.body);
   }
 
   function updateAutomation(id, updates) {
@@ -1186,23 +982,6 @@ function AdminInbox() {
     setProject({ ...fallbackProject, ...data, theme: { ...fallbackProject.theme, ...data.theme } });
   }
 
-  async function saveBilling(nextProject = project) {
-    setBillingStatus("Saving...");
-    try {
-      const data = await api("/api/projects/current/billing", {
-        method: "PATCH",
-        body: JSON.stringify({
-          plan: nextProject.plan,
-          billingStatus: nextProject.billingStatus
-        })
-      }, token);
-      setProject({ ...fallbackProject, ...data, theme: { ...fallbackProject.theme, ...data.theme } });
-      setBillingStatus("Saved");
-    } catch (err) {
-      setBillingStatus(err.error || "Could not save billing.");
-    }
-  }
-
   async function addStaffUser(event) {
     event.preventDefault();
     setStaffStatus("Adding...");
@@ -1230,31 +1009,13 @@ function AdminInbox() {
     }
   }
 
-  async function reviewPlanRequest(requestId, action) {
-    setPlanRequestAdminStatus(action === "approve" ? "Approving request..." : "Rejecting request...");
-    try {
-      await api(`/api/billing/requests/${requestId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ action })
-      }, token);
-      await loadPlanRequests();
-      if (action === "approve") {
-        const data = await api("/api/projects/current", {}, token);
-        setProject({ ...fallbackProject, ...data, theme: { ...fallbackProject.theme, ...data.theme } });
-      }
-      setPlanRequestAdminStatus(action === "approve" ? "Request approved and plan updated." : "Request rejected.");
-    } catch (err) {
-      setPlanRequestAdminStatus(err.error || "Could not review request.");
-    }
-  }
-
   async function draftAiReply() {
     if (!selectedId) return;
     setAiDraftStatus("Drafting...");
     try {
       const data = await api(`/api/conversations/${selectedId}/ai-draft`, { method: "POST", body: "{}" }, token);
       setReply(data.draft);
-      setAiDraftStatus(data.provider === "openai" ? "Drafted with OpenAI" : "Drafted with local rules");
+      setAiDraftStatus(`Drafted with ${data.provider}. Review before sending.`);
     } catch (err) {
       setAiDraftStatus(err.error || "Could not draft reply.");
     }
@@ -1265,11 +1026,6 @@ function AdminInbox() {
     setSettingsStatus("");
   }
 
-  function updateProjectPlan(updates) {
-    setProject(current => ({ ...current, ...updates }));
-    setBillingStatus("");
-  }
-
   const stats = useMemo(() => ({
     total: conversations.length,
     open: conversations.filter(conversation => conversation.status === "open").length,
@@ -1277,10 +1033,12 @@ function AdminInbox() {
     closed: conversations.filter(conversation => conversation.status === "closed").length
   }), [conversations]);
 
-  if (!token || !session) return <LoginScreen onLogin={handleLogin} />;
+  if (token && !session) return <main className="login-shell"><div className="login-panel"><h1>Opening your workspace</h1><p role="status">{inboxError || "Restoring your secure session…"}</p><button type="button" className="secondary-action" onClick={() => { localStorage.removeItem(AUTH_KEY); setToken(""); }}>Back to sign in</button></div></main>;
+  if (!token) return <LoginScreen onLogin={handleLogin} />;
+  if (window.location.pathname.startsWith("/owner")) return <OwnerConsole api={api} token={token} session={session} />;
 
   return (
-    <div className="admin-shell">
+    <div className={`admin-shell ${workspaceView === "settings" ? "settings-mode" : ""}`} data-view={workspaceView} data-settings-tab={settingsTab} style={{ "--cyan": project.theme.accentColor, "--brand-accent": project.theme.accentColor, "--workspace-panel": project.theme.panelColor }}>
       <aside className="admin-sidebar">
         <div className="admin-brand">
           <span className="brand-glyph">{project.theme?.brandName?.[0] || "S"}</span>
@@ -1290,6 +1048,18 @@ function AdminInbox() {
           </div>
         </div>
 
+        <div className="workspace-appearance"><span>Appearance</span><AppearanceControl /></div>
+        <nav className="workspace-navigation" aria-label="Workspace"><button type="button" className={workspaceView === "inbox" ? "active" : ""} onClick={() => setWorkspaceView("inbox")}>Inbox</button><button type="button" className={workspaceView === "settings" ? "active" : ""} onClick={() => setWorkspaceView("settings")}>Settings</button></nav>
+        <section className="notification-controls" aria-label="Inbox connection and notifications">
+          <strong role="status">{reliability.connection}</strong>
+          <button type="button" onClick={reliability.enableSound}>Enable &amp; test sound</button>
+          <small role="status">{reliability.soundStatus}</small>
+          <details className="notification-options"><summary>Notification options</summary>
+            {reliability.soundEnabled && <button type="button" onClick={reliability.muteSound}>Mute sound</button>}
+            <button type="button" onClick={reliability.enableDesktop}>Enable desktop alerts</button>
+            {reliability.desktopStatus && <small role="status">{reliability.desktopStatus}</small>}
+          </details>
+        </section>
         <div className="metric-grid">
           <div><span>{stats.total}</span><small>Total</small></div>
           <div><span>{stats.open}</span><small>Open</small></div>
@@ -1304,12 +1074,15 @@ function AdminInbox() {
           ))}
         </div>
 
+        <label className="inbox-search">Search inbox<input type="search" placeholder="Name, email, or message…" value={search} onChange={event => setSearch(event.target.value)} /></label>
+        {inboxError && <p role="alert" className="form-error">{inboxError}</p>}
+        <button className="small-button" type="button" onClick={() => { setWorkspaceView("inbox"); setShowSetup(true); }}>Workspace setup</button>
         <div className="conversation-list">
           {conversations.length === 0 && <p className="empty-list">No tickets in this view.</p>}
           {conversations.map(conversation => (
             <button key={conversation.id} type="button" className={selectedId === conversation.id ? "active convo" : "convo"} onClick={() => loadConversation(conversation.id)}>
               <span className={`status-dot ${conversation.status}`} />
-              <strong>{conversation.x_username || conversation.name || "Unknown customer"}</strong>
+              <strong>{conversation.x_username || conversation.name || "Unknown customer"}{conversation.unread_count > 0 && <span className="unread-badge" aria-label={`${conversation.unread_count} unread messages`}>{conversation.unread_count}</span>}</strong>
               <small>{conversation.status} - {formatTime(conversation.updated_at)}</small>
               <p>{conversation.last_message || "No messages yet"}</p>
             </button>
@@ -1318,6 +1091,8 @@ function AdminInbox() {
       </aside>
 
       <main className="thread-panel">
+        {(showSetup || !localStorage.getItem(`setup-done:${project.id}`)) && <WorkspaceSetup project={project} token={token} onProject={setProject} onClose={() => { localStorage.setItem(`setup-done:${project.id}`, "1"); setShowSetup(false); loadConversations(); }} />}
+
         {!selected ? (
           <div className="empty-thread">
             <span className="live-dot" />
@@ -1353,13 +1128,21 @@ function AdminInbox() {
 
             <form className="agent-reply reply-composer" onSubmit={sendAgentReply}>
               <div className="composer-stack">
-                <textarea placeholder="Reply as support..." value={reply} onChange={event => setReply(event.target.value)} />
+                <textarea aria-label="Reply as support" placeholder="Reply as support... Type / for saved replies" value={reply} onChange={event => setReply(event.target.value)} onKeyDown={event => {
+                  if (event.key === "Escape" && reply.startsWith("/")) { event.preventDefault(); setReply(""); }
+                  if ((event.key === "Tab" || event.key === "Enter") && /^\/[^\n]*$/.test(reply)) {
+                    const match = automations.find(item => !item.autoSend && item.title.toLowerCase().includes(reply.slice(1).toLowerCase()));
+                    if (match) { event.preventDefault(); setReply(match.body); }
+                  }
+                }} />
+                {/^\/[^\n]*$/.test(reply) && <div className="slash-replies" aria-label="Matching saved replies"><small>Choose a reply to insert. Enter or Tab picks the first match.</small>{automations.filter(item => !item.autoSend && item.title.toLowerCase().includes(reply.slice(1).toLowerCase())).map(item => <button type="button" key={item.id} onClick={() => setReply(item.body)}>{item.title}</button>)}</div>}
+                <label className="saved-reply-picker">Insert saved reply<select value="" onChange={event => { const template = automations.find(item => item.id === event.target.value); if (template) runAutomation(template); }}><option value="">Choose a reply…</option>{automations.filter(item => !item.autoSend).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
                 <AttachmentPicker attachments={replyAttachments} onChange={setReplyAttachments} label="Add image" />
                 {aiDraftStatus && <p className="settings-status">{aiDraftStatus}</p>}
               </div>
               <div className="reply-actions">
                 <button type="button" className="secondary-action" onClick={draftAiReply}>AI draft</button>
-                <button type="submit">Send reply</button>
+                <button type="submit" disabled={sendingReply || (!reply.trim() && replyAttachments.length === 0)}>{sendingReply ? "Sending…" : "Send reply"}</button>
               </div>
             </form>
           </>
@@ -1367,67 +1150,29 @@ function AdminInbox() {
       </main>
 
       <aside className="detail-panel">
-        <section>
+        {workspaceView === "settings" && <div className="settings-page-header"><span className="eyebrow">YOUR WORKSPACE</span><h1>Make yourself at home.</h1><p>A few thoughtful details make all the difference.</p><nav aria-label="Settings sections">{[["appearance", "Appearance"], ["workspace", "Workspace"], ["team", "Team"], ["billing", "Billing"], ["replies", "Saved replies"], ["integrations", "Integrations"]].map(([value, label]) => <button type="button" key={value} className={settingsTab === value ? "active" : ""} onClick={() => setSettingsTab(value)}>{label}</button>)}</nav></div>}
+        {workspaceView === "settings" && settingsTab === "integrations" && <Integrations api={api} token={token} />}
+        <section data-settings="workspace">
           <div className="settings-heading-row">
-            <h2>Project</h2>
+            <h2>Workspace</h2>
             <button type="button" className="small-button" onClick={logout}>Log out</button>
           </div>
 
+          {session.user?.isOwner && <a className="owner-area-link" href="/owner">Private owner area ↗</a>}
           <div className="detail-list">
-            <div><span>Project name</span><strong>{project.name}</strong></div>
-            <div><span>Plan</span><strong>{project.plan} - {String(project.billingStatus || "").replace("_", " ")}</strong></div>
+            <div><span>Workspace name</span><strong>{project.name}</strong></div>
+            <div><span>Plan</span><strong>{project.plan}</strong></div>
             <div><span>Widget key</span><strong>{project.widgetKey}</strong></div>
             <div><span>Install script</span><code>{`<script src="${API_URL}/widget.js" data-key="${project.widgetKey}"></script>`}</code></div>
           </div>
           <button type="button" className="sound-test" onClick={rotateWidgetKey}>Rotate widget key</button>
         </section>
 
-        <section>
-          <h2>Plan approval</h2>
-          <p className="muted">Review incoming pricing requests here. Approved requests update the active workspace plan and unlock the backend limits for that tier.</p>
-          <label className="settings-field">Plan
-            <select value={project.plan || "free"} onChange={event => updateProjectPlan({ plan: event.target.value })}>
-              {pricingPlans.map(plan => <option key={plan.id} value={plan.id}>{plan.name} - {plan.price}</option>)}
-            </select>
-          </label>
-          <label className="settings-field">Access status
-            <select value={project.billingStatus || "owner_approved"} onChange={event => updateProjectPlan({ billingStatus: event.target.value })}>
-              {billingStatuses.map(status => <option key={status.value} value={status.value}>{status.label}</option>)}
-            </select>
-          </label>
-          <button type="button" className="sound-test" disabled={!session.user?.isOwner} onClick={() => saveBilling()}>Approve plan</button>
-          {!session.user?.isOwner && <p className="settings-status">Only the owner account can approve billing changes.</p>}
-          {billingStatus && <p className="settings-status">{billingStatus}</p>}
+        <WorkspaceBilling api={api} token={token} project={{ ...project, contactEmail: session.user.email }} />
 
-          {session.user?.isOwner && (
-            <div className="request-review-list">
-              <div className="settings-heading-row">
-                <h3>Pending requests</h3>
-                <button type="button" className="small-button" onClick={loadPlanRequests}>Refresh</button>
-              </div>
-              {planRequests.length === 0 && <p className="muted">No pending requests.</p>}
-              {planRequests.map(request => (
-                <article key={request.id}>
-                  <div>
-                    <strong>{request.companyName}</strong>
-                    <span>{request.planName} - {request.contactEmail}</span>
-                    {request.websiteUrl && <a href={request.websiteUrl} target="_blank" rel="noreferrer">{request.websiteUrl}</a>}
-                    {request.notes && <p>{request.notes}</p>}
-                  </div>
-                  <div>
-                    <button type="button" className="small-button" onClick={() => reviewPlanRequest(request.id, "approve")}>Approve</button>
-                    <button type="button" className="small-button danger" onClick={() => reviewPlanRequest(request.id, "reject")}>Reject</button>
-                  </div>
-                </article>
-              ))}
-              {planRequestAdminStatus && <p className="settings-status">{planRequestAdminStatus}</p>}
-            </div>
-          )}
-        </section>
-
-        <section>
+        <section data-settings="team">
           <h2>Team access</h2>
-          <p className="muted">Owners usually invite teammates by email. For this MVP, add their email with a temporary password.</p>
+          <p className="muted">Add teammates to this workspace. Share their temporary password privately; they can use email recovery to choose a new one.</p>
           <form className="staff-form" onSubmit={addStaffUser}>
             <label className="settings-field">Email<input type="email" required value={staffForm.email} onChange={event => setStaffForm({ ...staffForm, email: event.target.value })} /></label>
             <label className="settings-field">Temporary password<input type="password" required minLength="10" value={staffForm.password} onChange={event => setStaffForm({ ...staffForm, password: event.target.value })} /></label>
@@ -1453,7 +1198,7 @@ function AdminInbox() {
           {staffStatus && <p className="settings-status">{staffStatus}</p>}
         </section>
 
-        <section>
+        <section className="ticket-context">
           <h2>Customer</h2>
           {selected ? (
             <div className="detail-list">
@@ -1467,10 +1212,10 @@ function AdminInbox() {
           )}
         </section>
 
-        <section>
-          <h2>Automations</h2>
+        <section className="ticket-context">
+          <h2>Saved replies</h2><p className="muted">Insert a reply, review it, then send.</p>
           <div className="automation-list">
-            {automations.map(template => (
+            {automations.filter(template => !template.autoSend).map(template => (
               <button key={template.id} type="button" disabled={!selectedId} onClick={() => runAutomation(template)}>
                 <strong>{template.title}{template.autoSend && <em>Auto-send</em>}</strong>
                 <span>{template.body}</span>
@@ -1479,8 +1224,9 @@ function AdminInbox() {
           </div>
         </section>
 
-        <section>
-          <h2>Theme settings</h2>
+        <section data-settings="appearance">
+          <h2>Appearance</h2>
+          <ThemeChooser theme={project.theme} onChange={updateTheme} />
           <label className="settings-field">Brand name<input value={project.theme.brandName} onChange={event => updateTheme({ brandName: event.target.value })} /></label>
           <label className="settings-field">Website URL<input value={project.websiteUrl || ""} onChange={event => setProject({ ...project, websiteUrl: event.target.value })} /></label>
           <label className="settings-field">Greeting<input value={project.theme.greeting} onChange={event => updateTheme({ greeting: event.target.value })} /></label>
@@ -1493,17 +1239,14 @@ function AdminInbox() {
             <label>Text<input type="color" value={project.theme.textColor} onChange={event => updateTheme({ textColor: event.target.value })} /></label>
           </div>
 
-          <label className="toggle-row">
-            <input type="checkbox" checked={project.aiEnabled} onChange={event => setProject({ ...project, aiEnabled: event.target.checked })} />
-            AI support replies
-          </label>
-
           <button type="button" className="sound-test" onClick={saveProjectSettings}>Save settings</button>
           {settingsStatus && <p className="settings-status">{settingsStatus}</p>}
 
+        </section>
+        <section data-settings="replies">
           <div className="automation-editor">
             <div className="settings-heading-row">
-              <h3>Automation templates</h3>
+              <h3>Saved replies &amp; automations</h3>
               <button type="button" className="small-button" onClick={() => setAutomations(current => [...current, { id: `custom-${Date.now()}`, title: "New automation", body: "Write the message agents can send here.", autoSend: false }])}>Add</button>
             </div>
 
@@ -1531,8 +1274,21 @@ function AdminInbox() {
 }
 
 function App() {
-  const isAdmin = window.location.pathname.startsWith("/admin");
+  if (window.location.pathname === "/admin/reset-password") return <PasswordRecovery api={api} onBack={() => window.location.assign("/admin")} />;
+  const isAdmin = window.location.pathname.startsWith("/admin") || window.location.pathname.startsWith("/owner");
   return isAdmin ? <AdminInbox /> : <CustomerWidget />;
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+async function mountApp() {
+  const root = createRoot(document.getElementById("root"));
+  if (!window.location.pathname.startsWith("/admin") && !window.location.pathname.startsWith("/owner") && !import.meta.env.VITE_WIDGET_KEY) {
+    root.render(<AppearanceProvider><MarketingPage /></AppearanceProvider>);
+    try {
+      const support = await api("/api/public/widget");
+      WIDGET_KEY = support.widgetKey;
+      CUSTOMER_TICKET_IDS_KEY = `support-customer-ticket-ids:${WIDGET_KEY}`;
+    } catch { root.render(<AppearanceProvider><MarketingPage /></AppearanceProvider>); return; }
+  }
+  root.render(<AppearanceProvider><App /></AppearanceProvider>);
+}
+void mountApp();

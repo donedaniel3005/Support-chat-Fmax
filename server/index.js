@@ -9,9 +9,10 @@ const path = require("path");
 const { Server } = require("socket.io");
 const { v4: uuid } = require("uuid");
 const Database = require("better-sqlite3");
+const nodemailer = require("nodemailer");
 
 const PORT = process.env.PORT || 4000;
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
+const CLIENT_URL = process.env.APP_URL || process.env.CLIENT_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:5173";
 const CLIENT_URLS = (process.env.CLIENT_URLS || CLIENT_URL)
   .split(",")
   .map(url => url.trim())
@@ -20,8 +21,10 @@ const DATABASE_PATH = process.env.DATABASE_PATH || "./support.sqlite";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@example.com";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin12345";
+if (process.env.NODE_ENV === "production" && (ADMIN_PASSWORD.length < 14 || ["admin12345", "change-this-before-deploying"].includes(ADMIN_PASSWORD) || ADMIN_EMAIL === "admin@example.com")) {
+  throw new Error("Production requires a real ADMIN_EMAIL and a unique ADMIN_PASSWORD of at least 14 characters.");
+}
 const OWNER_EMAIL = (process.env.OWNER_EMAIL || ADMIN_EMAIL || "danielkariuki3005@gmail.com").toLowerCase();
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const PRODUCT_NAME = "24/7Support";
 
 const PLAN_LIMITS = {
@@ -39,12 +42,17 @@ const PLAN_NAMES = {
 };
 
 const app = express();
+app.disable("x-powered-by");
+if (process.env.TRUST_PROXY_HOPS) app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS));
 const server = http.createServer(app);
 const db = new Database(DATABASE_PATH);
+db.pragma("journal_mode = WAL");
+db.pragma("busy_timeout = 5000");
 const CLIENT_DIST = path.join(__dirname, "..", "client", "dist");
 
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: "12mb" }));
+app.use(express.json({ limit: "12mb", verify: (req, res, buffer) => { if (req.originalUrl === "/api/webhooks/whop") req.rawBody = buffer; } }));
+app.use((req, res, next) => { res.set("Referrer-Policy", "no-referrer"); res.set("X-Content-Type-Options", "nosniff"); if (req.path.startsWith("/api/")) res.set("Cache-Control", "no-store"); next(); });
 
 const io = new Server(server, {
   cors: {
@@ -90,6 +98,17 @@ const DEFAULT_AUTOMATIONS = [
 ];
 
 db.exec(`
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversation_reads (
+  user_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  last_message_rowid INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, conversation_id)
+);
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -187,6 +206,8 @@ CREATE TABLE IF NOT EXISTS plan_requests (
 );
 `);
 
+db.exec("CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id); CREATE INDEX IF NOT EXISTS conversations_project_idx ON conversations(project_id, updated_at)");
+
 function now() {
   return new Date().toISOString();
 }
@@ -234,12 +255,14 @@ function parseTheme(value) {
 }
 
 function cleanTheme(theme = {}) {
+  const color = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
   return {
+    customPresets: (Array.isArray(theme.customPresets) ? theme.customPresets : []).slice(0, 8).filter(p => p && typeof p.name === "string").map(p => ({ name: p.name.trim().slice(0, 32), accentColor: color(p.accentColor, DEFAULT_THEME.accentColor), launcherColor: color(p.launcherColor, DEFAULT_THEME.launcherColor), panelColor: color(p.panelColor, DEFAULT_THEME.panelColor), textColor: color(p.textColor, DEFAULT_THEME.textColor) })),
     brandName: String(theme.brandName || DEFAULT_THEME.brandName).slice(0, 80),
-    accentColor: String(theme.accentColor || DEFAULT_THEME.accentColor).slice(0, 24),
-    launcherColor: String(theme.launcherColor || DEFAULT_THEME.launcherColor).slice(0, 24),
-    panelColor: String(theme.panelColor || DEFAULT_THEME.panelColor).slice(0, 24),
-    textColor: String(theme.textColor || DEFAULT_THEME.textColor).slice(0, 24),
+    accentColor: color(theme.accentColor, DEFAULT_THEME.accentColor),
+    launcherColor: color(theme.launcherColor, DEFAULT_THEME.launcherColor),
+    panelColor: color(theme.panelColor, DEFAULT_THEME.panelColor),
+    textColor: color(theme.textColor, DEFAULT_THEME.textColor),
     greeting: String(theme.greeting || DEFAULT_THEME.greeting).slice(0, 140),
     replyTime: String(theme.replyTime || DEFAULT_THEME.replyTime).slice(0, 140),
     position: theme.position === "left" ? "left" : "right"
@@ -490,6 +513,8 @@ function insertMessage({ conversationId, senderType, senderName, body, attachmen
     message.created_at
   );
 
+  const project = db.prepare("SELECT project_id FROM conversations WHERE id = ?").get(conversationId);
+  if (project) teamWebhooks.enqueue(project.project_id, "message.created", { id: message.id, conversation_id: conversationId, sender_type: senderType, body: message.body, created_at: message.created_at });
   return formatMessage({ ...message, attachments_json: JSON.stringify(message.attachments) });
 }
 
@@ -555,6 +580,11 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireWorkspaceAdmin(req, res, next) {
+  if (req.admin.role !== "admin" && !isOwner(req.admin)) return res.status(403).json({ error: "Only workspace admins can change settings." });
+  next();
+}
+
 function requireConversationAccess(req, res, next) {
   const admin = authenticateToken(getBearerToken(req));
   if (admin) {
@@ -566,6 +596,8 @@ function requireConversationAccess(req, res, next) {
   const widgetKey = req.headers["x-widget-key"] || req.query.widgetKey || req.body.widgetKey;
   const project = getProjectByWidgetKey(widgetKey);
   if (!project) return res.status(401).json({ error: "Valid widget key required." });
+  const active = requireActivePlan(project);
+  if (!active.allowed) return res.status(active.status).json({ error: active.error });
   req.project = project;
   req.projectId = project.id;
   next();
@@ -575,6 +607,8 @@ function requireWidgetProject(req, res, next) {
   const widgetKey = req.headers["x-widget-key"] || req.query.widgetKey || req.body.widgetKey;
   const project = getProjectByWidgetKey(widgetKey);
   if (!project) return res.status(401).json({ error: "Valid widget key required." });
+  const active = requireActivePlan(project);
+  if (!active.allowed) return res.status(active.status).json({ error: active.error });
   req.project = project;
   req.projectId = project.id;
   next();
@@ -582,57 +616,93 @@ function requireWidgetProject(req, res, next) {
 
 function emitProject(projectId, eventName, payload) {
   io.to(`project:${projectId}`).emit(eventName, payload);
+  if (["conversation:new", "conversation:updated"].includes(eventName)) teamWebhooks.enqueue(projectId, eventName === "conversation:new" ? "conversation.created" : "conversation.updated", { id: payload.id, status: payload.status, updated_at: payload.updated_at });
 }
 
-function heuristicAiReply(conversation) {
-  const latestUserMessage = [...conversation.messages].reverse().find(message => message.sender_type === "user");
-  const body = latestUserMessage?.body?.toLowerCase() || "";
-
-  if (body.includes("payment") || body.includes("paid") || body.includes("transaction")) {
-    return "Thanks for the payment details. Please send the transaction hash or payment reference and the wallet or email used so we can match it to your order.";
+const authAttempts = new Map();
+function limitAuth(req, res, next) {
+  const authPath = req.originalUrl.split("?")[0];
+  const key = req.ip + ":" + authPath;
+  const current = Date.now();
+  for (const [ip, value] of authAttempts) if (value.until < current) authAttempts.delete(ip);
+  const entry = authAttempts.get(key) || { count: 0, until: current + 15 * 60 * 1000 };
+  authAttempts.set(key, entry);
+  if (++entry.count > (authPath.endsWith("register") ? 20 : authPath.endsWith("forgot-password") ? 10 : 100)) {
+    res.set("Retry-After", String(Math.ceil((entry.until - current) / 1000)));
+    return res.status(429).json({ error: "Too many attempts. Please try again later." });
   }
-
-  if (body.includes("login") || body.includes("password") || body.includes("account")) {
-    return "Thanks for flagging this. Please confirm the email or username on the account, the exact error shown, and whether you have already tried resetting your password.";
-  }
-
-  if (body.includes("bug") || body.includes("error") || body.includes("not working")) {
-    return "Thanks, we can help check this. Please share the page URL, what you expected to happen, what happened instead, and a screenshot if possible.";
-  }
-
-  return "Thanks for reaching out. I can help with this. Please share any order reference, account email, screenshots, or steps that led to the issue so we can investigate quickly.";
+  next();
 }
+app.use("/api/auth/register", limitAuth);
+app.use("/api/auth/login", limitAuth);
+app.use("/api/auth/forgot-password", limitAuth);
+app.use("/api/auth/reset-password", limitAuth);
 
-async function generateAiReply(conversation) {
-  if (!OPENAI_API_KEY) return heuristicAiReply(conversation);
-
-  const transcript = conversation.messages
-    .slice(-12)
-    .map(message => `${message.sender_type === "agent" ? "Support" : "Customer"}: ${message.body}`)
-    .join("\n");
-
-  try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "Write a concise, friendly customer-support reply. Ask for only the missing details needed to proceed. Do not promise refunds, legal outcomes, or actions outside support policy." },
-          { role: "user", content: transcript }
-        ],
-        temperature: 0.4
-      })
-    });
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || heuristicAiReply(conversation);
-  } catch {
-    return heuristicAiReply(conversation);
-  }
+const mailer = process.env.SMTP_HOST ? nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT || 587),
+  secure: Number(process.env.SMTP_PORT || 587) === 465,
+  requireTLS: true,
+  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+  connectionTimeout: 10000, socketTimeout: 15000
+}) : null;
+const resetHash = token => crypto.createHash("sha256").update(token).digest("hex");
+function disconnectSessions(tokens) {
+  for (const socket of io.sockets.sockets.values()) if (tokens.includes(socket.data.sessionToken)) socket.disconnect(true);
 }
+app.post("/api/auth/forgot-password", async (req, res) => {
+  if (!mailer || !process.env.MAIL_FROM) return res.status(503).json({ error: "Email recovery is not configured yet. Please contact your workspace administrator." });
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const user = db.prepare("SELECT id, email FROM staff_users WHERE email = ?").get(email);
+  // Queue delivery without making the account's existence observable through the response.
+  const recentReset = user && db.prepare("SELECT token_hash FROM password_resets WHERE user_id = ? AND expires_at > ?").get(user.id, new Date(Date.now() + 29 * 60000).toISOString());
+  if (user && !recentReset) {
+    const token = crypto.randomBytes(32).toString("hex");
+    const hash = resetHash(token);
+    db.prepare("DELETE FROM password_resets WHERE user_id = ? OR expires_at < ?").run(user.id, now());
+    db.prepare("INSERT INTO password_resets VALUES (?, ?, ?)").run(hash, user.id, new Date(Date.now() + 30 * 60000).toISOString());
+    const link = new URL("/admin/reset-password", process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || CLIENT_URL);
+    link.hash = "token=" + token;
+    mailer.sendMail({ from: process.env.MAIL_FROM, to: user.email, subject: "Reset your 24/7Support password", text: `Use this link to choose a new password: ${link.href}\n\nThis link expires in 30 minutes and can be used once. If you did not request this, ignore this email.` })
+      .catch(() => { db.prepare("DELETE FROM password_resets WHERE token_hash = ?").run(hash); console.error("Password reset email delivery failed. Check SMTP configuration."); });
+  }
+  res.json({ message: "If an account exists for that email, a reset link will arrive shortly. Check your spam folder too." });
+});
+app.post("/api/auth/reset-password", (req, res) => {
+  const token = String(req.body.token || "");
+  const password = String(req.body.password || "");
+  if (!/^[a-f0-9]{64}$/.test(token) || password.length < 10 || password.length > 256) return res.status(400).json({ error: "Use a valid reset link and a password of 10–256 characters." });
+  const reset = db.prepare("SELECT * FROM password_resets WHERE token_hash = ? AND expires_at > ?").get(resetHash(token), now());
+  if (!reset) return res.status(400).json({ error: "This reset link has expired or already been used. Request a new one." });
+  const tokens = db.prepare("SELECT token FROM auth_sessions WHERE user_id = ?").all(reset.user_id).map(row => row.token);
+  db.transaction(() => {
+    db.prepare("UPDATE staff_users SET password_hash = ? WHERE id = ?").run(hashPassword(password), reset.user_id);
+    db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(reset.user_id);
+    db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(reset.user_id);
+  })();
+  disconnectSessions(tokens);
+  res.json({ message: "Password updated. Sign in with your new password." });
+});
+
+app.post("/api/auth/register", (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const password = String(req.body.password || "");
+  const name = String(req.body.name || "").trim().slice(0, 120);
+  if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 10 || password.length > 256) {
+    return res.status(400).json({ error: "Enter a workspace name, valid email, and password of 10–256 characters." });
+  }
+  if (db.prepare("SELECT id FROM staff_users WHERE email = ?").get(email)) return res.status(409).json({ error: "That email already has an account. Sign in instead." });
+  const projectId = uuid(), userId = uuid();
+  db.transaction(() => {
+    db.prepare("INSERT INTO projects (id, name, widget_key, secret_key, theme_json) VALUES (?, ?, ?, ?, ?)")
+      .run(projectId, name, randomKey("widget"), randomKey("secret"), JSON.stringify({ ...DEFAULT_THEME, brandName: name }));
+    db.prepare("INSERT INTO staff_users (id, project_id, email, password_hash, role) VALUES (?, ?, ?, ?, 'admin')")
+      .run(userId, projectId, email, hashPassword(password));
+    for (const t of DEFAULT_AUTOMATIONS) db.prepare("INSERT INTO automation_templates (id, project_id, title, body, auto_send, sort_order) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(uuid(), projectId, t.title, t.body, t.auto_send, t.sort_order);
+  })();
+  res.status(201).json({ ok: true });
+});
 
 app.get("/health", (req, res) => {
   res.json({ ok: true });
@@ -670,8 +740,15 @@ app.get("/api/auth/me", requireAdmin, (req, res) => {
 });
 
 app.post("/api/auth/logout", requireAdmin, (req, res) => {
+  disconnectSessions([getBearerToken(req)]);
   db.prepare("DELETE FROM auth_sessions WHERE token = ?").run(getBearerToken(req));
   res.json({ ok: true });
+});
+
+app.get("/api/public/widget", (req, res) => {
+  const project = process.env.PUBLIC_SUPPORT_WIDGET_KEY ? getProjectByWidgetKey(process.env.PUBLIC_SUPPORT_WIDGET_KEY) : getDefaultProject();
+  if (!project || !requireActivePlan(project).allowed) return res.status(404).json({ error: "Support widget unavailable." });
+  res.json({ widgetKey: project.widgetKey });
 });
 
 app.get("/api/widget/config", requireWidgetProject, (req, res) => {
@@ -679,11 +756,18 @@ app.get("/api/widget/config", requireWidgetProject, (req, res) => {
   if (!active.allowed) return res.status(active.status).json({ error: active.error });
   res.json({
     projectId: req.project.id,
-    brandName: PRODUCT_NAME,
-    theme: { ...req.project.theme, brandName: PRODUCT_NAME },
+    brandName: req.project.theme.brandName,
+    theme: req.project.theme,
     aiEnabled: req.project.aiEnabled && getPlanLimits(req.project.plan).aiDrafts,
-    billing: getPlanSummary(req.project)
+    billing: { plan: req.project.plan, limits: getPlanLimits(req.project.plan) }
   });
+});
+
+app.get("/widget-demo", (req, res) => {
+  const project = getProjectByWidgetKey(String(req.query.key || ""));
+  if (!project) return res.status(404).send("Widget not found.");
+  res.set("Content-Security-Policy", "frame-ancestors 'self' " + CLIENT_URLS.join(" "));
+  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Widget test page</title></head><body style="font:16px system-ui;padding:24px;background:#f1f5f9;color:#0f172a"><h1>Your widget is ready to test</h1><p>Open Chat, enter a customer ID, and send a message. It will appear in your support inbox.</p><script src="/widget.js" data-key="${project.widgetKey}"></script></body></html>`);
 });
 
 app.get("/widget.js", (req, res) => {
@@ -695,7 +779,7 @@ app.get("/api/projects/current", requireAdmin, (req, res) => {
   res.json({ ...project, billing: getPlanSummary(project) });
 });
 
-app.put("/api/projects/current", requireAdmin, (req, res) => {
+app.put("/api/projects/current", requireAdmin, requireWorkspaceAdmin, (req, res) => {
   const theme = cleanTheme(req.body.theme || {});
   const name = String(req.body.name || theme.brandName || "Support").trim().slice(0, 120);
   const websiteUrl = String(req.body.websiteUrl || "").trim().slice(0, 240);
@@ -731,14 +815,15 @@ app.get("/api/billing/limits", (req, res) => {
   res.json({ plans: PLAN_LIMITS });
 });
 
-app.post("/api/billing/requests", (req, res) => {
+app.post("/api/billing/requests", requireAdmin, (req, res) => {
   const allowedPlans = new Set(Object.keys(PLAN_LIMITS));
   const plan = String(req.body.plan || "").trim().toLowerCase();
   const companyName = String(req.body.companyName || "").trim().slice(0, 120);
   const contactEmail = String(req.body.contactEmail || "").trim().toLowerCase().slice(0, 160);
   const websiteUrl = String(req.body.websiteUrl || "").trim().slice(0, 240);
   const notes = String(req.body.notes || "").trim().slice(0, 1000);
-  const project = getDefaultProject();
+  const requester = authenticateToken(getBearerToken(req));
+  const project = requester ? formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(requester.project_id)) : null;
 
   if (!allowedPlans.has(plan)) return res.status(400).json({ error: "Choose a valid plan." });
   if (!companyName) return res.status(400).json({ error: "Company or project name is required." });
@@ -748,9 +833,9 @@ app.post("/api/billing/requests", (req, res) => {
 
   const recentDuplicate = db.prepare(`
     SELECT * FROM plan_requests
-    WHERE contact_email = ? AND plan = ? AND status = 'pending'
+    WHERE contact_email = ? AND plan = ? AND project_id IS ? AND status = 'pending'
     ORDER BY created_at DESC LIMIT 1
-  `).get(contactEmail, plan);
+  `).get(contactEmail, plan, project?.id || null);
 
   if (recentDuplicate) return res.status(200).json({ request: formatPlanRequest(recentDuplicate), duplicate: true });
 
@@ -758,7 +843,7 @@ app.post("/api/billing/requests", (req, res) => {
   db.prepare(`
     INSERT INTO plan_requests (id, project_id, plan, company_name, contact_email, website_url, notes, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-  `).run(requestId, project.id, plan, companyName, contactEmail, websiteUrl, notes, now());
+  `).run(requestId, project?.id || null, plan, companyName, contactEmail, websiteUrl, notes, now());
 
   const request = db.prepare("SELECT * FROM plan_requests WHERE id = ?").get(requestId);
   res.status(201).json({ request: formatPlanRequest(request) });
@@ -781,6 +866,7 @@ app.patch("/api/billing/requests/:id", requireAdmin, (req, res) => {
 
   const request = db.prepare("SELECT * FROM plan_requests WHERE id = ?").get(req.params.id);
   if (!request) return res.status(404).json({ error: "Plan request not found." });
+  if (action === "approve" && !request.project_id) return res.status(400).json({ error: "This prospect must create a workspace and submit an upgrade request while signed in." });
   if (request.status !== "pending") return res.status(400).json({ error: "This request has already been reviewed." });
 
   const nextStatus = action === "approve" ? "approved" : "rejected";
@@ -857,13 +943,15 @@ app.delete("/api/staff/:id", requireAdmin, (req, res) => {
     return res.status(400).json({ error: "You cannot remove your own account while signed in." });
   }
 
+  const revoked = db.prepare("SELECT token FROM auth_sessions WHERE user_id = ? AND user_id IN (SELECT id FROM staff_users WHERE project_id = ?)").all(req.params.id, req.admin.project_id).map(row => row.token);
+  disconnectSessions(revoked);
   const result = db.prepare("DELETE FROM staff_users WHERE id = ? AND project_id = ?").run(req.params.id, req.admin.project_id);
   if (result.changes === 0) return res.status(404).json({ error: "Staff user not found." });
   db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(req.params.id);
   res.json({ ok: true });
 });
 
-app.post("/api/projects/current/rotate-key", requireAdmin, (req, res) => {
+app.post("/api/projects/current/rotate-key", requireAdmin, requireWorkspaceAdmin, (req, res) => {
   const widgetKey = randomKey("widget");
   db.prepare("UPDATE projects SET widget_key = ?, updated_at = ? WHERE id = ?").run(widgetKey, now(), req.admin.project_id);
   res.json(formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id)));
@@ -873,7 +961,7 @@ app.get("/api/automations", requireAdmin, (req, res) => {
   res.json(getAutomationTemplates(req.admin.project_id));
 });
 
-app.put("/api/automations", requireAdmin, (req, res) => {
+app.put("/api/automations", requireAdmin, requireWorkspaceAdmin, (req, res) => {
   const templates = Array.isArray(req.body.automations) ? req.body.automations : [];
 
   if (templates.length < 1 || templates.length > 12) {
@@ -892,6 +980,12 @@ app.put("/api/automations", requireAdmin, (req, res) => {
     return res.status(400).json({ error: "Each automation needs a title and message." });
   }
 
+  if (new Set(normalized.map(t => t.id)).size !== normalized.length || normalized.some(t => t.title.length > 120 || t.body.length > 10000)) {
+    return res.status(400).json({ error: "Use unique reply IDs, titles up to 120 characters, and messages up to 10,000 characters." });
+  }
+  if (normalized.some(t => db.prepare("SELECT id FROM automation_templates WHERE id = ? AND project_id != ?").get(t.id, req.admin.project_id))) {
+    return res.status(409).json({ error: "Reply ID is unavailable. Add a new reply and try again." });
+  }
   const saveTemplates = db.transaction(() => {
     db.prepare("DELETE FROM automation_templates WHERE project_id = ?").run(req.admin.project_id);
     const insert = db.prepare(`
@@ -911,11 +1005,11 @@ app.post("/api/conversations", requireWidgetProject, async (req, res) => {
   const { name, email, wallet, xUsername, screenshotUrl, pageUrl, userAgent, firstMessage } = req.body;
   const attachments = cleanAttachments(req.body.attachments);
 
-  if (!firstMessage || firstMessage.trim().length < 1) {
+  if (typeof firstMessage !== "string" || !firstMessage.trim() || firstMessage.length > 10000) {
     return res.status(400).json({ error: "First message is required." });
   }
 
-  if (!xUsername || xUsername.trim().length < 1) {
+  if (typeof xUsername !== "string" || !xUsername.trim() || xUsername.length > 120) {
     return res.status(400).json({ error: "X username is required." });
   }
 
@@ -960,35 +1054,39 @@ app.post("/api/conversations", requireWidgetProject, async (req, res) => {
 
   const full = getConversationFull(conversationId, req.projectId);
   emitProject(req.projectId, "conversation:new", full);
+  emitProject(req.projectId, "inbox:message", full.messages.find(message => message.sender_type === "user"));
   await sendDiscordAlert({ projectName: req.project.name, name, email, xUsername }, firstMessage.trim());
 
   res.status(201).json(full);
 });
 
+app.get("/api/inbox/activity", requireAdmin, (req, res) => {
+  const latest = db.prepare("SELECT coalesce(max(m.rowid),0) AS cursor FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.project_id = ?").get(req.admin.project_id).cursor;
+  const after = req.query.after === undefined ? latest : Math.max(0, Number(req.query.after) || 0);
+  const messages = db.prepare("SELECT m.rowid AS sequence, m.id, m.conversation_id, m.sender_type, m.created_at FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.project_id = ? AND m.rowid > ? ORDER BY m.rowid LIMIT 200").all(req.admin.project_id, after);
+  const unread = db.prepare("SELECT count(*) AS count FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.project_id = ? AND m.sender_type = 'user' AND m.rowid > coalesce((SELECT last_message_rowid FROM conversation_reads WHERE user_id = ? AND conversation_id = c.id),0)").get(req.admin.project_id, req.admin.user_id).count;
+  res.json({ cursor: messages.length ? messages[messages.length - 1].sequence : latest, more: messages.length === 200, unread, messages });
+});
+app.post("/api/conversations/:id/read", requireAdmin, (req, res) => {
+  if (!getConversationFull(req.params.id, req.admin.project_id)) return res.status(404).json({ error: "Conversation not found." });
+  const latest = db.prepare("SELECT coalesce(max(rowid),0) AS cursor FROM messages WHERE conversation_id = ?").get(req.params.id).cursor;
+  db.prepare("INSERT INTO conversation_reads VALUES (?, ?, ?) ON CONFLICT(user_id, conversation_id) DO UPDATE SET last_message_rowid = excluded.last_message_rowid").run(req.admin.user_id, req.params.id, latest);
+  res.json({ ok: true });
+});
+
 app.get("/api/conversations", requireAdmin, (req, res) => {
-  const status = req.query.status;
-
-  const query = status
-    ? `
-      SELECT c.*, cu.name, cu.email, cu.wallet, cu.x_username,
-        (SELECT CASE WHEN body != '' THEN body ELSE '[Image attachment]' END FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message
-      FROM conversations c
-      JOIN customers cu ON cu.id = c.customer_id
-      WHERE c.project_id = ? AND c.status = ?
-      ORDER BY c.updated_at DESC
-    `
-    : `
-      SELECT c.*, cu.name, cu.email, cu.wallet, cu.x_username,
-        (SELECT CASE WHEN body != '' THEN body ELSE '[Image attachment]' END FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message
-      FROM conversations c
-      JOIN customers cu ON cu.id = c.customer_id
-      WHERE c.project_id = ?
-      ORDER BY c.updated_at DESC
-    `;
-
-  const rows = status
-    ? db.prepare(query).all(req.admin.project_id, status)
-    : db.prepare(query).all(req.admin.project_id);
+  const status = String(req.query.status || "");
+  const search = String(req.query.q || "").trim().slice(0, 200).toLowerCase();
+  const rows = db.prepare(`
+    SELECT c.*, cu.name, cu.email, cu.wallet, cu.x_username,
+      (SELECT count(*) FROM messages unread WHERE unread.conversation_id = c.id AND unread.sender_type = 'user' AND unread.rowid > coalesce((SELECT last_message_rowid FROM conversation_reads WHERE user_id = ? AND conversation_id = c.id),0)) AS unread_count,
+      (SELECT CASE WHEN body != '' THEN body ELSE '[Image attachment]' END FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC, rowid DESC LIMIT 1) as last_message
+    FROM conversations c JOIN customers cu ON cu.id = c.customer_id
+    WHERE c.project_id = ? AND (? = '' OR c.status = ?)
+      AND (? = '' OR instr(lower(coalesce(cu.name,'') || ' ' || coalesce(cu.email,'') || ' ' || coalesce(cu.x_username,'') || ' ' || coalesce(cu.wallet,'')), ?) > 0
+        OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND instr(lower(m.body), ?) > 0))
+    ORDER BY c.updated_at DESC, c.rowid DESC
+  `).all(req.admin.user_id, req.admin.project_id, status, status, search, search, search);
 
   res.json(rows);
 });
@@ -1011,7 +1109,7 @@ app.post("/api/conversations/:id/messages", requireConversationAccess, (req, res
     return res.status(403).json({ error: "Only staff can send agent messages." });
   }
 
-  if ((!body || body.trim().length < 1) && attachments.length === 0) {
+  if ((body != null && (typeof body !== "string" || body.length > 10000)) || ((!body || !body.trim()) && attachments.length === 0)) {
     return res.status(400).json({ error: "Message body or attachment is required." });
   }
 
@@ -1026,7 +1124,8 @@ app.post("/api/conversations/:id/messages", requireConversationAccess, (req, res
     attachments
   });
 
-  db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(now(), req.params.id);
+  db.prepare("UPDATE conversations SET updated_at = ?, status = CASE WHEN ? = 'user' AND status = 'closed' THEN 'open' ELSE status END WHERE id = ?").run(now(), senderType, req.params.id);
+  emitProject(req.projectId, "inbox:message", message);
   io.to(req.params.id).emit("message:new", message);
   emitProject(req.projectId, "conversation:updated", getConversationFull(req.params.id, req.projectId));
 
@@ -1052,19 +1151,24 @@ app.patch("/api/conversations/:id/status", requireAdmin, (req, res) => {
   res.json(full);
 });
 
+const teamWebhooks = require("./team-webhooks").createTeamWebhooks({ app, db, requireAdmin, requireWorkspaceAdmin });
+const teamAi = require("./team-ai").createTeamAi({ app, db, requireAdmin, requireWorkspaceAdmin });
+
 app.post("/api/conversations/:id/ai-draft", requireAdmin, async (req, res) => {
   const conversation = getConversationFull(req.params.id, req.admin.project_id);
   if (!conversation) return res.status(404).json({ error: "Conversation not found." });
 
   const project = formatProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(req.admin.project_id));
-  if (!project.aiEnabled) return res.status(400).json({ error: "AI support is disabled for this project." });
+
   if (!getPlanLimits(project.plan).aiDrafts) {
     return res.status(402).json({ error: "AI drafts are available on Growth and Partner plans." });
   }
 
-  const draft = await generateAiReply(conversation);
-  res.json({ draft, provider: OPENAI_API_KEY ? "openai" : "local-rule" });
+  try { res.json(await teamAi.draft(req.admin.project_id, conversation)); }
+  catch (error) { res.status(error.status || 502).json({ error: error.message }); }
 });
+
+require("./billing").registerBilling({ app, db, requireAdmin, isOwner, now });
 
 if (fs.existsSync(CLIENT_DIST)) {
   app.use(express.static(CLIENT_DIST));
@@ -1075,17 +1179,26 @@ if (fs.existsSync(CLIENT_DIST)) {
 }
 
 io.on("connection", socket => {
-  socket.on("project:join", projectId => {
-    socket.join(`project:${projectId}`);
+  function allowed(conversationId, credentials) {
+    const admin = authenticateToken(credentials?.token);
+    const project = admin ? { id: admin.project_id } : getProjectByWidgetKey(credentials?.widgetKey);
+    return project && (admin || requireActivePlan(project).allowed) && db.prepare("SELECT id FROM conversations WHERE id = ? AND project_id = ?").get(conversationId, project.id);
+  }
+  socket.on("project:join", (payload, ack) => {
+    const admin = authenticateToken(payload?.token);
+    if (!admin || admin.project_id !== payload?.projectId) return ack?.({ error: "Unauthorized" });
+    socket.data.sessionToken = payload.token;
+    socket.join(`project:${admin.project_id}`);
+    ack?.({ ok: true });
   });
-
-  socket.on("conversation:join", conversationId => {
-    socket.join(conversationId);
+  socket.on("conversation:join", (payload, ack) => {
+    if (!allowed(payload?.conversationId, payload)) return ack?.({ error: "Unauthorized" });
+    if (payload.token) socket.data.sessionToken = payload.token;
+    socket.join(payload.conversationId);
+    ack?.({ ok: true });
   });
-
-  socket.on("conversation:leave", conversationId => {
-    socket.leave(conversationId);
-  });
+  socket.on("conversation:leave", id => socket.leave(id));
+  socket.on("project:leave", id => socket.leave(`project:${id}`));
 });
 
 function widgetScript() {
@@ -1100,9 +1213,9 @@ function widgetScript() {
   root.id = "support-chat-platform-widget";
   document.body.appendChild(root);
 
-  var state = { open: false, config: null, conversationId: localStorage.getItem("support-widget-conversation-" + widgetKey) || "", messages: [] };
+  var state = { open: false, config: null, conversationId: localStorage.getItem("support-widget-conversation-" + widgetKey) || "", messages: [], draft: "", error: "", sending: false };
   var css = document.createElement("style");
-  css.textContent = ".scp-launcher{position:fixed;bottom:24px;width:62px;height:62px;border:0;border-radius:50%;z-index:2147483000;box-shadow:0 18px 50px rgba(15,23,42,.28);cursor:pointer}.scp-panel{position:fixed;bottom:98px;width:380px;max-width:calc(100vw - 28px);height:590px;max-height:calc(100vh - 122px);z-index:2147482999;border-radius:18px;overflow:hidden;box-shadow:0 24px 80px rgba(15,23,42,.32);display:flex;flex-direction:column}.scp-head{padding:18px;color:#fff}.scp-head strong,.scp-head small{display:block}.scp-head small{opacity:.72;margin-top:4px}.scp-body{flex:1;background:#fff;color:#111827;overflow:auto;padding:16px;display:grid;align-content:start;gap:10px}.scp-msg{max-width:84%;padding:10px 12px;border-radius:14px;background:#eef2f7;line-height:1.4}.scp-msg.user{justify-self:end;color:#fff}.scp-form{background:#fff;border-top:1px solid #e5e7eb;padding:12px;display:grid;gap:8px}.scp-form input,.scp-form textarea{width:100%;border:1px solid #d1d5db;border-radius:10px;padding:10px;font:inherit}.scp-form textarea{min-height:74px;resize:vertical}.scp-form button{border:0;border-radius:10px;padding:11px 12px;color:#fff;font-weight:800;cursor:pointer}.scp-hidden{display:none}";
+  css.textContent = "#support-chat-platform-widget *{box-sizing:border-box;font-family:Arial,sans-serif}.scp-launcher{position:fixed;bottom:24px;width:62px;height:62px;border:0;border-radius:50%;z-index:2147483000;box-shadow:0 18px 50px rgba(15,23,42,.28);cursor:pointer}.scp-panel{position:fixed;bottom:98px;width:380px;max-width:calc(100vw - 28px);height:590px;max-height:calc(100vh - 122px);z-index:2147482999;border-radius:18px;overflow:hidden;box-shadow:0 24px 80px rgba(15,23,42,.32);display:flex;flex-direction:column}.scp-head{padding:18px;color:#fff}.scp-head strong,.scp-head small{display:block}.scp-head small{opacity:.72;margin-top:4px}.scp-body{flex:1;background:#fff;color:#111827;overflow:auto;padding:16px;display:grid;align-content:start;gap:10px}.scp-msg{max-width:84%;padding:10px 12px;border-radius:14px;background:#eef2f7;line-height:1.4}.scp-msg.user{justify-self:end;color:#fff}.scp-form{background:#fff;border-top:1px solid #e5e7eb;padding:12px;display:grid;gap:8px}.scp-form input,.scp-form textarea{width:100%;border:1px solid #d1d5db;border-radius:10px;padding:10px;font:inherit}.scp-form textarea{min-height:74px;resize:vertical}.scp-form button{border:0;border-radius:10px;padding:11px 12px;color:#fff;font-weight:800;cursor:pointer}.scp-hidden{display:none}";
   document.head.appendChild(css);
 
   function escapeHtml(value) {
@@ -1130,18 +1243,37 @@ function widgetScript() {
         '<div class="scp-body">' + (state.messages.length ? state.messages.map(function (message) {
           return '<div class="scp-msg ' + escapeHtml(message.sender_type) + '" style="' + (message.sender_type === "user" ? "background:" + accent : "") + '">' + escapeHtml(message.body) + '</div>';
         }).join("") : '<div class="scp-msg">' + escapeHtml(theme.greeting || "Hi, how can we help?") + '</div>') + '</div>' +
-        '<form class="scp-form">' + (!state.conversationId ? '<input name="xUsername" required placeholder="X username or customer ID"><input name="email" type="email" placeholder="Email">' : '') + '<textarea name="message" required placeholder="Type your message..."></textarea><button style="background:' + accent + '">Send</button></form>' +
+        '<form class="scp-form">' + (!state.conversationId ? '<input name="xUsername" aria-label="Customer ID" required placeholder="X username or customer ID"><input name="email" aria-label="Email" type="email" placeholder="Email">' : '') + '<textarea name="message" aria-label="Message" required maxlength="10000" placeholder="Type your message...">' + escapeHtml(state.draft) + '</textarea>' + (state.error ? '<small role="alert" style="color:#b91c1c">' + escapeHtml(state.error) + '</small>' : '') + '<button ' + (state.sending ? 'disabled ' : '') + 'style="background:' + accent + '">' + (state.sending ? 'Sending…' : 'Send') + '</button></form>' +
       '</section>';
 
     root.querySelector(".scp-launcher").onclick = function () { state.open = !state.open; render(); };
     root.querySelector(".scp-form")?.addEventListener("submit", submitMessage);
+    root.querySelector("textarea").oninput = function (event) { state.draft = event.target.value; };
   }
+
+  setInterval(function () {
+    if (!state.open || !state.conversationId) return;
+    api("/api/conversations/" + state.conversationId).then(function (conversation) {
+      if (JSON.stringify(state.messages) === JSON.stringify(conversation.messages)) return;
+      var input = root.querySelector("textarea");
+      var focused = document.activeElement === input;
+      var caret = input?.selectionStart || 0;
+      var draft = input?.value || "";
+      state.messages = conversation.messages || [];
+      render();
+      root.querySelector("textarea").value = draft;
+      if (focused) { root.querySelector("textarea").focus(); root.querySelector("textarea").setSelectionRange(caret, caret); }
+      root.querySelector(".scp-body").scrollTop = root.querySelector(".scp-body").scrollHeight;
+    }).catch(function () {});
+  }, 3000);
 
   function submitMessage(event) {
     event.preventDefault();
     var form = event.target;
     var message = form.message.value.trim();
-    if (!message) return;
+    if (!message || state.sending) return;
+    state.sending = true; state.error = "";
+    form.querySelector("button").disabled = true;
     var request = state.conversationId
       ? api("/api/conversations/" + state.conversationId + "/messages", { method: "POST", body: JSON.stringify({ senderType: "user", body: message, widgetKey: widgetKey }) })
       : api("/api/conversations", { method: "POST", body: JSON.stringify({ widgetKey: widgetKey, xUsername: form.xUsername.value, email: form.email.value, firstMessage: message, pageUrl: location.href, userAgent: navigator.userAgent }) });
@@ -1153,8 +1285,9 @@ function widgetScript() {
       } else {
         state.messages.push(data);
       }
+      state.sending = false; state.draft = ""; state.error = "";
       render();
-    }).catch(function (error) { alert(error.error || "Could not send message."); });
+    }).catch(function (error) { state.sending = false; state.error = error.error || "Connection interrupted. Your message is still here — please try sending again."; render(); });
   }
 
   api("/api/widget/config?widgetKey=" + encodeURIComponent(widgetKey)).then(function (config) {
@@ -1167,10 +1300,7 @@ function widgetScript() {
     } else {
       render();
     }
-  }).catch(function () {
-    state.config = { theme: {} };
-    render();
-  });
+  }).catch(function () { root.remove(); });
 }());
 `;
 }

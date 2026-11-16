@@ -1,3 +1,11 @@
 node_modules
 .env
 *.log
+
+*.sqlite-wal
+*.sqlite-shm
+backups/
+
+*.sqlite
+*.sqlite3
+team-integrations-*.jpg

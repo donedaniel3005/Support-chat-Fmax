@@ -1,0 +1,119 @@
+:root {
+  --ui-bg: #f6f8f4;
+  --ui-surface: #ffffff;
+  --ui-soft: #eef3ea;
+  --ui-raised: #fafcf8;
+  --ui-line: #dfe7d9;
+  --ui-text: #293c2d;
+  --ui-muted: #58694f;
+  --ui-faint: #77866f;
+  --ui-accent: #245b45;
+  --ui-accent-soft: #e5efdf;
+  --ui-on-accent: #ffffff;
+  --ui-focus: #5d936b;
+  --ui-danger: #b33b45;
+}
+:root[data-appearance="dark"] {
+  --ui-bg: #111714;
+  --ui-surface: #19211c;
+  --ui-soft: #232f26;
+  --ui-raised: #1d2821;
+  --ui-line: #35443a;
+  --ui-text: #e5eee5;
+  --ui-muted: #b0bfae;
+  --ui-faint: #91a48e;
+  --ui-accent: #b4dfbc;
+  --ui-accent-soft: #2b4231;
+  --ui-on-accent: #163020;
+  --ui-focus: #a5d8af;
+  --ui-danger: #ffabb0;
+}
+html[data-appearance], html[data-appearance] body { background: var(--ui-bg); }
+.appearance-control { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--ui-line); border-radius: 10px; background: var(--ui-raised); }
+.appearance-control button { display: inline-flex; justify-content: center; align-items: center; width: 30px; height: 30px; padding: 6px; border: 0; border-radius: 7px; background: transparent; color: var(--ui-muted); cursor: pointer; }
+.appearance-control button svg { width: 17px; height: 17px; }
+.appearance-control button:hover { background: var(--ui-soft); color: var(--ui-text); }
+.appearance-control button[aria-pressed="true"] { color: var(--ui-accent); background: var(--ui-accent-soft); box-shadow: 0 1px 3px #00000008; }
+html[data-appearance] :is(button,a,input,textarea,select,summary):focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 3px; }
+.workspace-appearance { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 18px; }
+.workspace-appearance > span { color: var(--ui-muted); font-size: 12px; }
+.login-appearance { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.owner-header-actions { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+/* Give secondary copy enough contrast in the warm light palette, too. */
+html[data-appearance="light"] .site-page :is(.site-caption,.site-payment-note,.site-footer > span,.site-footer > a:not(.site-wordmark),.site-eyebrow,.site-plan > p,.site-plan li,.site-faq article p) { color: #65725f; }
+html[data-appearance="light"] .login-panel :is(p,label,.eyebrow) { color: #63755b; }
+/* Shared dark surfaces. Customer widget colors remain the workspace's brand choice. */
+html[data-appearance="dark"] :is(.site-page,.admin-shell,.owner-console,.login-shell) { background: var(--ui-bg); color: var(--ui-text); --ink: var(--ui-text); --muted: var(--ui-muted); --line: var(--ui-line); --surface: var(--ui-surface); --surface-2: var(--ui-soft); }
+html[data-appearance="dark"] :is(.admin-shell .admin-sidebar,.admin-shell .detail-panel,.admin-shell .thread-panel,.admin-shell .thread-header,.admin-shell .admin-messages,.admin-shell .agent-reply,.owner-console section,.login-panel) { background: var(--ui-surface); border-color: var(--ui-line); color: var(--ui-text); }
+html[data-appearance="dark"] .admin-shell .admin-sidebar { background: #151d18; }
+html[data-appearance="dark"] :is(.admin-shell h1,.admin-shell h2,.admin-shell h3,.admin-shell strong,.login-panel h1,.login-panel .login-brand-row strong,.owner-console h1,.owner-console h2,.settings-page-header h1) { color: var(--ui-text); }
+html[data-appearance="dark"] :is(.admin-shell p,.admin-shell small,.admin-shell label,.admin-shell .detail-list span,.admin-shell .detail-list strong,.admin-shell .muted,.admin-shell .settings-status,.admin-shell .theme-chooser p,.admin-shell .notification-controls small,.admin-shell .automation-list span,.admin-shell .toggle-row,.admin-shell .theme-grid label,.admin-shell .automation-card label,.settings-page-header p,.login-panel p,.login-panel label,.login-panel .eyebrow,.owner-console p) { color: var(--ui-muted); }
+html[data-appearance="dark"] :is(.admin-shell input,.admin-shell textarea,.admin-shell select,.admin-shell .agent-reply textarea,.login-panel input,.owner-console input,.owner-console select) { color: var(--ui-text); background: var(--ui-bg); border-color: var(--ui-line); }
+html[data-appearance="dark"] :is(input,textarea)::placeholder { color: var(--ui-faint); opacity: 1; }
+html[data-appearance="dark"] :is(.admin-shell .small-button,.admin-shell .sound-test,.admin-shell .status-buttons button,.admin-shell .secondary-action,.admin-shell .agent-reply .reply-actions .secondary-action,.admin-shell .notification-controls button,.admin-shell .automation-list button,.admin-shell .theme-swatches button,.login-panel .secondary-action) { background: var(--ui-raised); color: var(--ui-muted); border-color: var(--ui-line); }
+html[data-appearance="dark"] :is(.workspace-navigation,.admin-shell .filter-tabs,.admin-shell .automation-card,.admin-shell .workspace-setup,.admin-shell .detail-list code,.admin-shell .metric-grid div) { background: var(--ui-soft); border-color: var(--ui-line); color: var(--ui-text); }
+html[data-appearance="dark"] :is(.workspace-navigation button,.admin-shell .filter-tabs button,.settings-page-header button) { color: var(--ui-muted); }
+html[data-appearance="dark"] :is(.workspace-navigation button.active,.admin-shell .filter-tabs button.active,.settings-page-header button.active,.admin-shell .status-buttons button.active) { color: var(--ui-accent); background: var(--ui-accent-soft); border-color: #516f55; }
+html[data-appearance="dark"] :is(.admin-shell .convo,.admin-shell .conversation-list,.admin-shell .admin-brand,.admin-shell .notification-controls,.settings-page-header nav) { border-color: var(--ui-line); }
+html[data-appearance="dark"] .admin-shell .convo { background: transparent; }
+html[data-appearance="dark"] .admin-shell .convo.active { background: var(--ui-accent-soft); border-left-color: var(--ui-accent); }
+html[data-appearance="dark"] :is(.admin-shell .convo strong,.admin-shell .metric-grid span) { color: var(--ui-text); }
+html[data-appearance="dark"] .admin-shell .bubble { background: var(--ui-soft); color: var(--ui-text); }
+html[data-appearance="dark"] .admin-shell .bubble.agent { background: var(--ui-accent-soft); color: var(--ui-text); }
+html[data-appearance="dark"] .admin-shell .bubble p { color: inherit; }
+html[data-appearance="dark"] .admin-shell .bubble span { color: var(--ui-faint); }
+html[data-appearance="dark"] :is(.admin-shell .brand-glyph,.login-panel .brand-glyph,.admin-shell .thread-status) { background: var(--ui-accent-soft); color: var(--ui-accent); }
+html[data-appearance="dark"] :is(.admin-shell .reply-actions button[type="submit"],.login-panel > button[type="submit"],.owner-console button) { background: #abd3a8; color: #172d19; }
+html[data-appearance="dark"] :is(.admin-shell .workspace-setup button,.admin-shell .workspace-setup pre,.admin-shell .setup-preview) { background: var(--ui-surface); color: var(--ui-text); border-color: var(--ui-line); }
+html[data-appearance="dark"] :is(.admin-shell .unread-badge,.owner-console .owner-area-link) { color: var(--ui-on-accent); background: var(--ui-accent); }
+html[data-appearance="dark"] :is(.admin-shell .owner-area-link,.login-panel a,.owner-console a,.notification-options) { color: var(--ui-accent); }
+html[data-appearance="dark"] :is(.form-error,.login-panel .form-error) { color: var(--ui-danger); }
+/* The marketing palette has its own depth while retaining the same green signature. */
+html[data-appearance="dark"] .site-page h1,html[data-appearance="dark"] .site-page h2,html[data-appearance="dark"] .site-page h3 { color: var(--ui-text); }
+html[data-appearance="dark"] .site-hero h1 em { color: #a9c69e; }
+html[data-appearance="dark"] .site-page :is(.hero-editorial > p,.site-section-heading p,.site-brand-section > div > p,.site-feature-grid p,.site-plan > p,.site-plan li,.site-faq > div > p,.site-faq article p,.site-faq button,.site-principles,.site-caption,.site-eyebrow,.site-payment-note,.site-footer > span,.site-footer > a:not(.site-wordmark),.site-plan-price span) { color: var(--ui-muted); }
+html[data-appearance="dark"] .site-pill { background: var(--ui-soft); border-color: var(--ui-line); color: #b8cdb0; }
+html[data-appearance="dark"] .site-page :is(.site-feature-grid article,.site-plan,.site-brand-section,.site-final) { background: var(--ui-raised); border-color: var(--ui-line); }
+html[data-appearance="dark"] .site-plan.featured { background: #223326; border-color: #7e9e71; }
+html[data-appearance="dark"] .site-feature-icon { background: var(--ui-accent-soft); color: var(--ui-accent); }
+html[data-appearance="dark"] .site-page :is(.site-button.dark,.site-logo) { background: #b6d6a9; color: #1b3120; border-color: #b6d6a9; }
+html[data-appearance="dark"] .site-page .site-button.outline { border-color: #5b7059; color: #d4e3cf; }
+html[data-appearance="dark"] .site-page :is(.site-principles,.site-faq article) { border-color: var(--ui-line); }
+html[data-appearance="dark"] .site-page .plan-popular { background: #5d7d50; color: #fff; }
+html[data-appearance="dark"] :is(.hero-product,.product-window-bar) { background: var(--ui-soft); border-color: var(--ui-line); }
+html[data-appearance="dark"] :is(.product-preview-list,.product-preview-thread,.product-floating-note,.brand-widget) { background: var(--ui-surface); color: var(--ui-text); border-color: var(--ui-line); }
+html[data-appearance="dark"] :is(.product-window aside,.preview-bubble,.preview-compose,.brand-widget > div > span) { background: var(--ui-soft); color: var(--ui-muted); border-color: var(--ui-line); }
+html[data-appearance="dark"] :is(.product-window aside > strong,.product-preview-list > header,.product-preview-thread > header,.preview-ticket strong,.product-floating-note strong,.brand-widget > div > strong) { color: var(--ui-text); }
+html[data-appearance="dark"] :is(.product-window aside .product-nav-active,.preview-ticket.chosen,.preview-bubble.reply,.product-floating-note > span) { background: var(--ui-accent-soft); color: var(--ui-text); }
+html[data-appearance="dark"] :is(.product-preview-list header,.product-preview-thread header,.preview-ticket,.brand-widget footer) { border-color: var(--ui-line); }
+html[data-appearance="dark"] :is(.product-window-bar small,.preview-ticket p,.product-floating-note small,.product-preview-list header span,.product-preview-thread > small,.brand-palette span,.brand-widget footer) { color: var(--ui-faint); }
+/* Preserve branded widget previews instead of recoloring customer content. */
+html[data-appearance="dark"] .admin-shell .theme-live-preview p { color: inherit; }
+@media(max-width:600px) {
+  .site-nav { gap: 10px; }
+  .site-nav-actions { gap: 0; }
+  .site-nav-actions > a { display: none; }
+  .appearance-control button { width: 32px; height: 34px; }
+  .site-wordmark { font-size: 16px; }
+  .owner-header-actions { gap: 12px; }
+}
+@media(prefers-reduced-motion:no-preference) {
+  .appearance-control button { transition: background-color .16s ease,color .16s ease; }
+}
+@media(max-width:600px) {
+  .site-page .site-nav-actions > a { display: none; }
+  .site-page .site-nav { justify-content: space-between; }
+}
+html[data-appearance="dark"] .admin-shell .detail-panel section { border-color: var(--ui-line); }
+html[data-appearance="dark"] :is(.settings-page-header .eyebrow,.login-panel .eyebrow) { color: var(--ui-faint); }
+.admin-shell .theme-chooser .theme-live-preview :is(strong,p) { color: inherit; }
+html[data-appearance] .login-shell .login-panel button.secondary-action { background: var(--ui-soft); color: var(--ui-text); border: 1px solid var(--ui-line); }
+html[data-appearance="light"] .login-shell .login-panel button[type="submit"] { background: #355b3e; color: #ffffff; }
+html[data-appearance="dark"] .login-shell .login-panel button[type="submit"] { background: #abd3a8; color: #172d19; }
+/* A quieter launcher keeps the customer's brand color without decorative glow. */
+.launcher { height: 54px; width: 142px; padding: 0 18px; border: 1px solid #ffffff26; box-shadow: 0 8px 24px #00000024; }
+.launcher::before,.launcher::after { display: none; }
+.launcher svg { width: 23px; height: 23px; filter: none; }
+.launcher span { color: inherit; font-size: 13px; font-weight: 600; }
+.launcher.open { width: 54px; }
+.launcher:hover { box-shadow: 0 12px 28px #0000002a; }
